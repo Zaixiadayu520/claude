@@ -168,19 +168,30 @@ def _parse_cards(soup: BeautifulSoup, seller_id: str) -> list[dict]:
         # Sponsored flag
         sponsored = "Yes" if card.select_one(".s-label-popover-default, [class*='AdHolder']") else "No"
 
+        # Monthly sales — "X+ bought in past month" badge
+        monthly_sales = ""
+        for tag in card.select("span.a-size-base, span.a-color-secondary, div.a-row"):
+            text = _clean(tag.get_text())
+            m = re.search(r"([\d,K+]+)\+?\s*bought in past month", text, re.IGNORECASE)
+            if m:
+                monthly_sales = m.group(0).split("bought")[0].strip()
+                break
+
         products.append({
-            "seller_id":    seller_id,
-            "asin":         asin,
-            "title":        title,
-            "brand":        brand,
-            "price":        price,
-            "list_price":   list_price,
-            "rating":       rating,
-            "review_count": review_count,
-            "prime":        prime,
-            "sponsored":    sponsored,
+            "seller_id":      seller_id,
+            "asin":           asin,
+            "title":          title,
+            "brand":          brand,
+            "price":          price,
+            "list_price":     list_price,
+            "rating":         rating,
+            "review_count":   review_count,
+            "prime":          prime,
+            "sponsored":      sponsored,
+            "monthly_sales":  monthly_sales,
+            "date_first_available": "",   # filled later if detail fetch enabled
             "main_image_url": image_url,
-            "url":          url,
+            "url":            url,
         })
 
     return products
@@ -268,3 +279,62 @@ def scrape_seller(seller_id: str) -> list[dict]:
 
     logger.info("Seller %s: %d unique products total", seller_id, len(all_products))
     return all_products
+
+
+# ── Detail page: Date First Available ────────────────────────────────────────
+
+def fetch_listing_dates(products: list[dict],
+                        max_workers: int = 3) -> None:
+    """
+    Fill in date_first_available for each product by visiting its detail page.
+    Modifies products in-place.  Uses a small thread pool to stay polite.
+    """
+    logger.info("Fetching listing dates for %d products...", len(products))
+
+    def _fetch_one(product: dict) -> None:
+        asin = product.get("asin", "")
+        if not asin:
+            return
+        session = _build_session()
+        url = f"https://www.{config.AMAZON_DOMAIN}/dp/{asin}"
+        soup = _get(session, url)
+        if not soup:
+            return
+        date_str = _extract_date_first_available(soup)
+        if date_str:
+            product["date_first_available"] = date_str
+        time.sleep(random.uniform(1.5, 3.0))
+
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = [pool.submit(_fetch_one, p) for p in products]
+        done = 0
+        for f in as_completed(futures):
+            f.result()
+            done += 1
+            if done % 10 == 0:
+                logger.info("  Date fetch progress: %d/%d", done, len(products))
+
+    logger.info("Listing date fetch complete.")
+
+
+def _extract_date_first_available(soup: BeautifulSoup) -> str:
+    """Parse 'Date First Available' from a product detail page."""
+    # Method 1: detail bullets list
+    for li in soup.select("#detailBullets_feature_div li"):
+        spans = li.select("span.a-list-item span")
+        if len(spans) >= 2 and "Date First Available" in spans[0].get_text():
+            return _clean(spans[1].get_text())
+
+    # Method 2: product details table
+    for row in soup.select("tr.a-spacing-small, tr"):
+        th = row.select_one("td.a-span3 span, th")
+        td = row.select_one("td.a-span9 span, td:last-child")
+        if th and td and "Date First Available" in th.get_text():
+            return _clean(td.get_text())
+
+    # Method 3: tech specs table
+    match = re.search(
+        r"Date First Available[^\n]*?\n\s*([A-Za-z]+ \d{1,2}, \d{4})",
+        soup.get_text(), re.IGNORECASE,
+    )
+    return match.group(1) if match else ""

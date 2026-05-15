@@ -27,7 +27,8 @@ def safe_seller_id(seller_id: str) -> str:
 COLUMNS = [
     "seller_id", "asin", "title", "brand",
     "price", "list_price", "rating", "review_count",
-    "prime", "sponsored", "main_image_url", "url",
+    "prime", "sponsored", "monthly_sales",
+    "date_first_available", "main_image_url", "url",
 ]
 
 

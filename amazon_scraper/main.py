@@ -8,7 +8,7 @@ from datetime import date, datetime
 from pathlib import Path
 
 from . import config
-from .scraper import scrape_seller
+from .scraper import scrape_seller, fetch_listing_dates
 from .storage import save_snapshot, find_new_products, append_new_products
 from .db import init_db, upsert_products, log_run
 
@@ -28,7 +28,8 @@ def _setup_logging() -> None:
 
 
 def run_once(seller_ids: list[str] | None = None,
-             days_back: int | None = None) -> None:
+             days_back: int | None = None,
+             fetch_dates: bool = False) -> None:
     _setup_logging()
     logger = logging.getLogger(__name__)
 
@@ -55,6 +56,11 @@ def run_once(seller_ids: list[str] | None = None,
                                     days_back=lookback)
             new_asins = {p["asin"] for p in new}
             all_new.extend(new)
+
+            # Optionally enrich new products with listing date from detail pages
+            if fetch_dates and new:
+                logger.info("采集 %d 个新产品的上架日期...", len(new))
+                fetch_listing_dates(new, max_workers=3)
 
             upsert_products(products, new_asins, today)
             log_run(seller_id, len(products), len(new), started_at)
