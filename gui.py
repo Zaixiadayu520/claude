@@ -23,10 +23,11 @@ DEFAULT_SETTINGS = {
     "sellers": [],
     "schedule_time": "08:00",
     "schedule_enabled": False,
-    "listing_preset": "最近30天",   # 上架时间预设
-    "listing_date_start": "",       # 自定义上架起始日期 YYYY-MM-DD
-    "listing_date_end":   "",       # 自定义上架结束日期 YYYY-MM-DD
-    "fetch_listing_date": True,     # 采集上架日期（访问详情页）
+    "listing_preset": "最近30天",
+    "listing_date_start": "",
+    "listing_date_end":   "",
+    "fetch_listing_date": True,
+    "proxy": "",   # HTTP/HTTPS代理，例如 http://127.0.0.1:7890
 }
 
 # ── 配色 ──────────────────────────────────────────────────────────────────────
@@ -801,6 +802,19 @@ class App(tk.Tk):
                "※ 按产品上架日期（Date First Available）筛选新品，建议同时开启下方[采集上架日期]",
                size=8, fg=FG2, bg=BG2).pack(side="left")
 
+        # ── 代理设置 ──────────────────────────────────────────────────────────
+        proxy_row = tk.Frame(ctrl_card, bg=BG2)
+        proxy_row.pack(fill="x", padx=14, pady=(0, 6))
+        _label(proxy_row, "代理设置：", size=9, fg=FG2, bg=BG2).pack(side="left")
+        self.proxy_var = tk.StringVar(value=self.settings.get("proxy", ""))
+        proxy_entry = _entry(proxy_row, self.proxy_var, font=("Consolas", 9))
+        proxy_entry.config(width=30)
+        proxy_entry.pack(side="left", ipady=3, padx=(0, 6))
+        _label(proxy_row, "例：http://127.0.0.1:7890", size=8, fg=FG2, bg=BG2).pack(side="left")
+        _btn(proxy_row, "保存", self._save_proxy, bg=BG3).pack(side="left", padx=(6, 0))
+        self.proxy_status = _label(proxy_row, "", size=8, fg=GREEN, bg=BG2)
+        self.proxy_status.pack(side="left", padx=(6, 0))
+
         # ── 行2：定时时间 + 操作按钮 ─────────────────────────────────────────
         row = tk.Frame(ctrl_card, bg=BG2)
         row.pack(fill="x", padx=14, pady=(0, 12))
@@ -948,6 +962,26 @@ class App(tk.Tk):
             btn.config(bg=BG3, fg=FG)
         logging.info("上架时间筛选（自定义）：%s ~ %s", start, end)
 
+    # ── 代理 ──────────────────────────────────────────────────────────────────
+
+    def _save_proxy(self):
+        proxy = self.proxy_var.get().strip()
+        self.settings["proxy"] = proxy
+        save_settings(self.settings)
+        # Apply to amazon_scraper config immediately
+        try:
+            from amazon_scraper import config as _cfg
+            _cfg.PROXY = proxy
+        except Exception:
+            pass
+        if proxy:
+            self.proxy_status.config(text=f"已保存 ✓", fg=GREEN)
+            logging.info("代理已设置：%s", proxy)
+        else:
+            self.proxy_status.config(text="已清除", fg=FG2)
+            logging.info("代理已清除")
+        self.after(3000, lambda: self.proxy_status.config(text=""))
+
     # ── 采集 ──────────────────────────────────────────────────────────────────
 
     def _run_now(self):
@@ -967,6 +1001,13 @@ class App(tk.Tk):
         save_settings(self.settings)
 
     def _scraper_worker(self, seller_ids: list[str]):
+        # Sync proxy setting to scraper config before each run
+        try:
+            from amazon_scraper import config as _cfg
+            _cfg.PROXY = self.settings.get("proxy", "")
+        except Exception:
+            pass
+
         fetch_dates   = self.settings.get("fetch_listing_date", True)
         listing_start = self.settings.get("listing_date_start", "")
         listing_end   = self.settings.get("listing_date_end",   "")
