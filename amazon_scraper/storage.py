@@ -12,6 +12,17 @@ from . import config
 
 logger = logging.getLogger(__name__)
 
+
+def safe_seller_id(seller_id: str) -> str:
+    """If seller_id is a full URL, extract the 'me=' parameter value.
+    Then strip any characters that are illegal in Windows filenames."""
+    import re
+    m = re.search(r'[?&]me=([A-Z0-9]+)', seller_id, re.IGNORECASE)
+    if m:
+        return m.group(1)
+    return re.sub(r'[\\/:*?"<>|\s]', '_', seller_id)
+
+
 # Canonical column order for all CSV files
 COLUMNS = [
     "seller_id", "asin", "title", "brand",
@@ -28,7 +39,7 @@ def _data_dir() -> Path:
 
 def snapshot_path(seller_id: str, for_date: Optional[date] = None) -> Path:
     d = for_date or date.today()
-    return _data_dir() / f"snapshot_{seller_id}_{d.isoformat()}.csv"
+    return _data_dir() / f"snapshot_{safe_seller_id(seller_id)}_{d.isoformat()}.csv"
 
 
 def new_products_path(for_date: Optional[date] = None) -> Path:

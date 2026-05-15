@@ -222,6 +222,9 @@ def scrape_seller(seller_id: str) -> list[dict]:
     Scrape all pages of a seller's storefront concurrently.
     Returns deduplicated list of product dicts.
     """
+    # Normalise: accept full storefront URLs, extract just the ID
+    from .storage import safe_seller_id
+    seller_id = safe_seller_id(seller_id)
     logger.info("=== Scraping seller %s ===", seller_id)
     max_pages = config.MAX_PAGES_PER_SELLER or 999
     workers   = min(config.CONCURRENT_PAGES, max_pages)

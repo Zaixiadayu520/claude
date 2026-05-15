@@ -78,32 +78,44 @@ class AddSellerDialog(tk.Toplevel):
         self.resizable(False, False)
         self.configure(bg=BG2)
         self.grab_set()
-        self.geometry(f"420x230+{parent.winfo_rootx()+160}+{parent.winfo_rooty()+160}")
+        self.geometry(f"480x270+{parent.winfo_rootx()+140}+{parent.winfo_rooty()+140}")
 
         tk.Label(self, text="添加新店铺", font=("微软雅黑", 13, "bold"),
-                 bg=BG2, fg=FG).pack(pady=(20, 10))
+                 bg=BG2, fg=FG).pack(pady=(18, 6))
+
+        # 提示：支持粘贴完整 URL
+        tk.Label(self,
+                 text="可直接粘贴店铺完整 URL，系统自动提取卖家 ID",
+                 font=("微软雅黑", 8), bg=BG2, fg=FG2).pack()
 
         form = tk.Frame(self, bg=BG2)
-        form.pack(padx=30, fill="x")
+        form.pack(padx=30, fill="x", pady=(10, 0))
 
         def _row(label, row):
             tk.Label(form, text=label, font=("微软雅黑", 9),
-                     bg=BG2, fg=FG2).grid(row=row, column=0, sticky="w", pady=5)
+                     bg=BG2, fg=FG2).grid(row=row, column=0, sticky="w", pady=6)
 
-        _row("卖家 ID *", 0)
+        _row("卖家 ID / URL *", 0)
         self.id_var = tk.StringVar()
-        _entry(form, self.id_var, font=("Consolas", 10)).grid(
-            row=0, column=1, sticky="ew", padx=(10, 0), pady=5, ipady=4)
+        id_entry = _entry(form, self.id_var, font=("Consolas", 10))
+        id_entry.grid(row=0, column=1, sticky="ew", padx=(10, 0), pady=6, ipady=4)
+        id_entry.focus()
 
         _row("店铺名称", 1)
         self.name_var = tk.StringVar()
         _entry(form, self.name_var).grid(
-            row=1, column=1, sticky="ew", padx=(10, 0), pady=5, ipady=4)
+            row=1, column=1, sticky="ew", padx=(10, 0), pady=6, ipady=4)
+
+        # 解析预览
+        self.preview = tk.Label(form, text="", font=("Consolas", 8),
+                                bg=BG2, fg=CYAN)
+        self.preview.grid(row=2, column=1, sticky="w", padx=(10, 0))
+        self.id_var.trace_add("write", self._update_preview)
 
         form.columnconfigure(1, weight=1)
 
         self.err = tk.Label(self, text="", font=("微软雅黑", 8), bg=BG2, fg=RED)
-        self.err.pack()
+        self.err.pack(pady=(4, 0))
 
         bf = tk.Frame(self, bg=BG2)
         bf.pack(pady=10)
@@ -113,12 +125,26 @@ class AddSellerDialog(tk.Toplevel):
         self.bind("<Return>", lambda e: self._ok())
         self.bind("<Escape>", lambda e: self.destroy())
 
+    def _extract_id(self, raw: str) -> str:
+        import re
+        m = re.search(r'[?&]me=([A-Z0-9]+)', raw, re.IGNORECASE)
+        return m.group(1) if m else raw.strip()
+
+    def _update_preview(self, *_):
+        raw = self.id_var.get().strip()
+        extracted = self._extract_id(raw)
+        if extracted != raw and extracted:
+            self.preview.config(text=f"→ 将使用卖家 ID：{extracted}")
+        else:
+            self.preview.config(text="")
+
     def _ok(self):
-        sid = self.id_var.get().strip()
-        name = self.name_var.get().strip() or sid
-        if not sid:
+        raw = self.id_var.get().strip()
+        if not raw:
             self.err.config(text="卖家 ID 不能为空")
             return
+        sid = self._extract_id(raw)
+        name = self.name_var.get().strip() or sid
         self.result = {"id": sid, "name": name}
         self.destroy()
 
@@ -129,44 +155,91 @@ class DBViewerDialog(tk.Toplevel):
     def __init__(self, parent):
         super().__init__(parent)
         self.title("数据库数据查看")
-        self.geometry("1000x560")
+        self.geometry("1060x620")
+        self.minsize(900, 500)
         self.configure(bg=BG)
         self.grab_set()
         self._build()
-        self._load()
+        self._apply_quick("最近30天")   # 默认加载最近30天
+
+    # ── 构建界面 ──────────────────────────────────────────────────────────────
 
     def _build(self):
-        top = tk.Frame(self, bg=BG)
-        top.pack(fill="x", padx=12, pady=8)
+        # ── 第一行：日期快捷选择 ──────────────────────────────────────────────
+        row1 = tk.Frame(self, bg=BG2,
+                        highlightthickness=1, highlightbackground=BORDER)
+        row1.pack(fill="x", padx=12, pady=(10, 4))
 
-        tk.Label(top, text="查询条件：", font=("微软雅黑", 9), bg=BG, fg=FG2).pack(side="left")
+        _label(row1, "  时间范围：", size=9, fg=FG2, bg=BG2).pack(
+            side="left", padx=(6, 0), pady=8)
 
+        self._active_quick = tk.StringVar(value="")
+        quick_options = ["今日", "最近7天", "最近30天", "最近90天", "今年", "全部"]
+        self._quick_btns: dict[str, tk.Button] = {}
+        for label in quick_options:
+            b = tk.Button(
+                row1, text=label,
+                font=("微软雅黑", 9), relief="flat", cursor="hand2",
+                padx=10, pady=4, bd=0,
+                command=lambda l=label: self._apply_quick(l),
+            )
+            b.pack(side="left", padx=3, pady=6)
+            self._quick_btns[label] = b
+
+        # 分隔
+        tk.Label(row1, text="|", bg=BG2, fg=BORDER,
+                 font=("微软雅黑", 12)).pack(side="left", padx=8)
+
+        # 自定义日期范围
+        _label(row1, "自定义：", size=9, fg=FG2, bg=BG2).pack(side="left")
+
+        self.start_var = tk.StringVar()
+        self.end_var   = tk.StringVar()
+
+        _label(row1, "开始", size=8, fg=FG2, bg=BG2).pack(side="left", padx=(4, 2))
+        start_e = _entry(row1, self.start_var, font=("Consolas", 9))
+        start_e.pack(side="left", ipady=3, ipadx=4)
+        start_e.config(width=12)
+
+        _label(row1, "结束", size=8, fg=FG2, bg=BG2).pack(side="left", padx=(8, 2))
+        end_e = _entry(row1, self.end_var, font=("Consolas", 9))
+        end_e.pack(side="left", ipady=3, ipadx=4)
+        end_e.config(width=12)
+
+        _label(row1, "（格式：YYYY-MM-DD）", size=8, fg=FG2, bg=BG2).pack(
+            side="left", padx=(4, 0))
+
+        # ── 第二行：关键词筛选 + 操作按钮 ────────────────────────────────────
+        row2 = tk.Frame(self, bg=BG)
+        row2.pack(fill="x", padx=12, pady=(2, 6))
+
+        _label(row2, "关键词：", size=9, fg=FG2, bg=BG).pack(side="left")
         self.filter_var = tk.StringVar()
-        e = _entry(top, self.filter_var)
-        e.pack(side="left", padx=6, ipady=3)
-        tk.Label(top, text="（输入 ASIN / 标题 / 品牌 关键词）",
-                 font=("微软雅黑", 8), bg=BG, fg=FG2).pack(side="left")
+        kw_e = _entry(row2, self.filter_var)
+        kw_e.pack(side="left", padx=6, ipady=3, ipadx=4)
+        _label(row2, "ASIN / 标题 / 品牌", size=8, fg=FG2, bg=BG).pack(side="left")
 
         self.only_new = tk.BooleanVar()
-        tk.Checkbutton(top, text="只看今日新品", variable=self.only_new,
+        tk.Checkbutton(row2, text="仅看新品", variable=self.only_new,
                        bg=BG, fg=FG, selectcolor=BG3,
                        activebackground=BG, activeforeground=FG,
-                       font=("微软雅黑", 9)).pack(side="left", padx=10)
+                       font=("微软雅黑", 9)).pack(side="left", padx=(12, 4))
 
-        _btn(top, "查询", self._load, bg=ACCENT).pack(side="left", padx=4)
-        _btn(top, "刷新", self._load, bg=BG3).pack(side="left")
+        _btn(row2, "🔍 查询", self._load, bg=ACCENT).pack(side="left", padx=(6, 4))
+        _btn(row2, "导出 CSV", self._export_csv, bg=BG3).pack(side="left", padx=4)
 
-        self.count_label = tk.Label(top, text="", font=("微软雅黑", 9),
+        self.count_label = tk.Label(row2, text="", font=("微软雅黑", 9),
                                     bg=BG, fg=FG2)
         self.count_label.pack(side="right", padx=10)
 
+        # ── 表格 ──────────────────────────────────────────────────────────────
         cols = ("asin", "title", "brand", "price", "rating",
                 "review_count", "prime", "seller_id", "scraped_date", "is_new")
         col_labels = ("ASIN", "标题", "品牌", "价格", "评分",
                       "评论数", "Prime", "店铺ID", "采集日期", "新品")
 
         frame = tk.Frame(self, bg=BG)
-        frame.pack(fill="both", expand=True, padx=12, pady=(0, 8))
+        frame.pack(fill="both", expand=True, padx=12, pady=(0, 10))
 
         style = ttk.Style()
         style.theme_use("clam")
@@ -183,20 +256,50 @@ class DBViewerDialog(tk.Toplevel):
 
         self.tree = ttk.Treeview(frame, columns=cols, show="headings",
                                  style="Dark.Treeview")
-        widths = (110, 260, 100, 80, 60, 80, 55, 130, 100, 50)
-        for col, label, w in zip(cols, col_labels, widths):
-            self.tree.heading(col, text=label)
+        widths = (110, 240, 100, 80, 58, 80, 55, 130, 100, 50)
+        for col, lbl, w in zip(cols, col_labels, widths):
+            self.tree.heading(col, text=lbl,
+                              command=lambda c=col: self._sort_by(c))
             self.tree.column(col, width=w, anchor="w")
 
-        vsb = ttk.Scrollbar(frame, orient="vertical", command=self.tree.yview)
+        vsb = ttk.Scrollbar(frame, orient="vertical",   command=self.tree.yview)
         hsb = ttk.Scrollbar(frame, orient="horizontal", command=self.tree.xview)
         self.tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
-
         self.tree.grid(row=0, column=0, sticky="nsew")
         vsb.grid(row=0, column=1, sticky="ns")
         hsb.grid(row=1, column=0, sticky="ew")
         frame.rowconfigure(0, weight=1)
         frame.columnconfigure(0, weight=1)
+
+        self._sort_col = ""
+        self._sort_asc = True
+
+    # ── 快捷日期 ──────────────────────────────────────────────────────────────
+
+    def _apply_quick(self, label: str):
+        from datetime import date, timedelta
+        today = date.today()
+
+        mapping = {
+            "今日":    (today, today),
+            "最近7天": (today - timedelta(days=6), today),
+            "最近30天":(today - timedelta(days=29), today),
+            "最近90天":(today - timedelta(days=89), today),
+            "今年":    (date(today.year, 1, 1), today),
+            "全部":    (date(2000, 1, 1), today),
+        }
+        start, end = mapping.get(label, (date(2000, 1, 1), today))
+        self.start_var.set(start.isoformat())
+        self.end_var.set(end.isoformat())
+
+        # 高亮当前选中的快捷按钮
+        for lbl, btn in self._quick_btns.items():
+            btn.config(bg=ACCENT if lbl == label else BG3,
+                       fg="white" if lbl == label else FG)
+        self._active_quick.set(label)
+        self._load()
+
+    # ── 查询 ──────────────────────────────────────────────────────────────────
 
     def _load(self):
         try:
@@ -205,12 +308,16 @@ class DBViewerDialog(tk.Toplevel):
             if not DB_PATH.exists():
                 messagebox.showinfo("提示", "数据库尚未创建，请先运行一次采集。")
                 return
-            con = sqlite3.connect(str(DB_PATH))
-            keyword = self.filter_var.get().strip()
-            only_new = self.only_new.get()
 
-            conditions = []
-            params: list = []
+            con = sqlite3.connect(str(DB_PATH))
+            keyword  = self.filter_var.get().strip()
+            only_new = self.only_new.get()
+            start    = self.start_var.get().strip() or "2000-01-01"
+            end      = self.end_var.get().strip()   or "2099-12-31"
+
+            conditions = ["scraped_date BETWEEN ? AND ?"]
+            params: list = [start, end]
+
             if keyword:
                 conditions.append(
                     "(asin LIKE ? OR title LIKE ? OR brand LIKE ?)")
@@ -218,13 +325,13 @@ class DBViewerDialog(tk.Toplevel):
             if only_new:
                 conditions.append("is_new=1")
 
-            where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+            where = "WHERE " + " AND ".join(conditions)
             sql = f"""
                 SELECT asin, title, brand, price, rating,
                        review_count, prime, seller_id, scraped_date, is_new
                 FROM products {where}
                 ORDER BY scraped_date DESC, id DESC
-                LIMIT 2000
+                LIMIT 5000
             """
             rows = con.execute(sql, params).fetchall()
             con.close()
@@ -234,9 +341,48 @@ class DBViewerDialog(tk.Toplevel):
                 tag = "new" if row[-1] == 1 else ""
                 self.tree.insert("", "end", values=row, tags=(tag,))
             self.tree.tag_configure("new", foreground=GREEN)
-            self.count_label.config(text=f"共 {len(rows)} 条记录")
+            self.count_label.config(
+                text=f"共 {len(rows)} 条  [{start} ~ {end}]")
         except Exception as exc:
             messagebox.showerror("查询失败", str(exc))
+
+    # ── 列排序 ────────────────────────────────────────────────────────────────
+
+    def _sort_by(self, col: str):
+        rows = [(self.tree.set(k, col), k) for k in self.tree.get_children("")]
+        asc = not self._sort_asc if self._sort_col == col else True
+        rows.sort(reverse=not asc)
+        for idx, (_, k) in enumerate(rows):
+            self.tree.move(k, "", idx)
+        self._sort_col = col
+        self._sort_asc = asc
+
+    # ── 导出 CSV ──────────────────────────────────────────────────────────────
+
+    def _export_csv(self):
+        from tkinter import filedialog
+        import csv
+        from datetime import date
+        path = filedialog.asksaveasfilename(
+            defaultextension=".csv",
+            filetypes=[("CSV 文件", "*.csv")],
+            initialfile=f"export_{date.today().isoformat()}.csv",
+        )
+        if not path:
+            return
+        cols = ("asin", "title", "brand", "price", "rating",
+                "review_count", "prime", "seller_id", "scraped_date", "is_new")
+        col_labels = ("ASIN", "标题", "品牌", "价格", "评分",
+                      "评论数", "Prime", "店铺ID", "采集日期", "新品")
+        try:
+            with open(path, "w", newline="", encoding="utf-8-sig") as f:
+                w = csv.writer(f)
+                w.writerow(col_labels)
+                for row_id in self.tree.get_children():
+                    w.writerow(self.tree.item(row_id)["values"])
+            messagebox.showinfo("导出成功", f"已保存至：\n{path}")
+        except Exception as exc:
+            messagebox.showerror("导出失败", str(exc))
 
 
 # ── 通用小控件 ────────────────────────────────────────────────────────────────
