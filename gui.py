@@ -768,12 +768,13 @@ class App(tk.Tk):
         self.fetch_date_var = tk.BooleanVar(
             value=self.settings.get("fetch_listing_date", False))
         tk.Checkbutton(
-            tbox, text="采集上架日期（较慢）",
+            tbox,
+            text="✅ 采集上架日期+月销量（访问详情页，数据更准确）",
             variable=self.fetch_date_var,
-            bg=BG2, fg=FG2, selectcolor=BG3,
-            activebackground=BG2, font=("微软雅黑", 8),
+            bg=BG2, fg=YELLOW, selectcolor=BG3,
+            activebackground=BG2, font=("微软雅黑", 8, "bold"),
             command=self._on_fetch_date_toggle,
-        ).pack(anchor="w", pady=(2, 0))
+        ).pack(anchor="w", pady=(4, 0))
 
         # 操作按钮
         btns = tk.Frame(row, bg=BG2)
@@ -883,10 +884,15 @@ class App(tk.Tk):
     def _scraper_worker(self, seller_ids: list[str]):
         days_back   = self.settings.get("new_product_days", 30)
         fetch_dates = self.settings.get("fetch_listing_date", False)
-        self._set_status(f"采集中（新品范围：{days_back}天）...", GREEN)
+        self._set_status(f"列表页采集中...", GREEN)
+
+        def progress_cb(done: int, total: int):
+            self._set_status(f"详情页 {done}/{total}...", YELLOW)
+
         try:
             from amazon_scraper.main import run_once
-            run_once(seller_ids, days_back=days_back, fetch_dates=fetch_dates)
+            run_once(seller_ids, days_back=days_back, fetch_dates=fetch_dates,
+                     progress_cb=progress_cb if fetch_dates else None)
         except ImportError as e:
             logging.error("依赖缺失：%s", e)
         except Exception as e:
