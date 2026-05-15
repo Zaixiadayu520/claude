@@ -746,7 +746,7 @@ class App(tk.Tk):
         hint_row = tk.Frame(ctrl_card, bg=BG2)
         hint_row.pack(fill="x", padx=14, pady=(0, 4))
         _label(hint_row,
-               "※ 按产品上架日期（Date First Available）筛选新品，建议同时开启下方"采集上架日期"",
+               "※ 按产品上架日期（Date First Available）筛选新品，建议同时开启下方[采集上架日期]",
                size=8, fg=FG2, bg=BG2).pack(side="left")
 
         # ── 行2：定时时间 + 操作按钮 ─────────────────────────────────────────
