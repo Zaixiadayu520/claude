@@ -6,8 +6,7 @@ Edit SELLER_IDS and other settings before running.
 # ── Sellers to monitor ────────────────────────────────────────────────────────
 # Add Amazon Seller IDs here (visible in the seller's storefront URL: ?me=XXXXX)
 SELLER_IDS = [
-    # "A1EXAMPLE000001",
-    # "A1EXAMPLE000002",
+    "AO15CCGYGZREK",
 ]
 
 # ── Site settings ─────────────────────────────────────────────────────────────
