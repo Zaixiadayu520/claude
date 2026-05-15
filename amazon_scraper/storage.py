@@ -66,25 +66,40 @@ def load_snapshot(seller_id: str, for_date: Optional[date] = None) -> list[dict]
 
 def find_new_products(seller_id: str,
                       today_products: list[dict],
-                      today: Optional[date] = None) -> list[dict]:
+                      today: Optional[date] = None,
+                      days_back: int = 1) -> list[dict]:
     """
-    Compare today's products against yesterday's snapshot.
-    Return products whose ASIN was not present yesterday.
+    Return products whose ASIN was NOT seen in the past `days_back` days.
+
+    Lookup order:
+      1. SQLite database (fast, covers all past runs)
+      2. CSV snapshots  (fallback when DB is unavailable)
     """
     today = today or date.today()
-    yesterday = today - timedelta(days=1)
+    known_asins: set[str] = set()
 
-    yesterday_snapshot = load_snapshot(seller_id, yesterday)
-    yesterday_asins = {row["asin"] for row in yesterday_snapshot if row.get("asin")}
+    # 1. Try database
+    try:
+        from .db import get_known_asins
+        known_asins = get_known_asins(seller_id, days_back, today)
+    except Exception as exc:
+        logger.debug("DB lookup failed (%s), falling back to CSV snapshots", exc)
 
-    if not yesterday_asins:
+    # 2. CSV fallback
+    if not known_asins:
+        for offset in range(1, days_back + 1):
+            snap = load_snapshot(seller_id, today - timedelta(days=offset))
+            known_asins |= {r["asin"] for r in snap if r.get("asin")}
+
+    if not known_asins:
         logger.info(
-            "No yesterday snapshot for seller %s — all %d products treated as new",
+            "无历史数据（%s），所有 %d 个产品视为新品",
             seller_id, len(today_products),
         )
 
-    new = [p for p in today_products if p.get("asin") not in yesterday_asins]
-    logger.info("Seller %s: %d new products (vs yesterday)", seller_id, len(new))
+    new = [p for p in today_products if p.get("asin") not in known_asins]
+    logger.info("店铺 %s：发现 %d 个新产品（对比过去 %d 天）",
+                seller_id, len(new), days_back)
     return new
 
 

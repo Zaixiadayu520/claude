@@ -75,9 +75,11 @@ def _get(session: requests.Session, url: str) -> Optional[BeautifulSoup]:
 # ── Listing page parsing ──────────────────────────────────────────────────────
 
 def _storefront_url(seller_id: str, page: int = 1) -> str:
+    # s=date-desc-rank sorts by newest listing first so we see fresh products early
     return (
         f"https://www.{config.AMAZON_DOMAIN}/s"
-        f"?me={seller_id}&marketplaceID={config.MARKETPLACE_ID}&page={page}"
+        f"?me={seller_id}&marketplaceID={config.MARKETPLACE_ID}"
+        f"&s=date-desc-rank&page={page}"
     )
 
 

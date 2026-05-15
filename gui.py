@@ -23,6 +23,7 @@ DEFAULT_SETTINGS = {
     "sellers": [],
     "schedule_time": "08:00",
     "schedule_enabled": False,
+    "new_product_days": 30,   # 新品判断：与过去 N 天对比
 }
 
 # ── 配色 ──────────────────────────────────────────────────────────────────────
@@ -556,15 +557,58 @@ class App(tk.Tk):
                              highlightthickness=1, highlightbackground=BORDER)
         ctrl_card.pack(fill="x", pady=(0, 8))
         _label(ctrl_card, "  采集设置", size=10, bold=True, bg=BG2).pack(
-            anchor="w", padx=4, pady=(10, 6))
+            anchor="w", padx=4, pady=(10, 4))
 
+        # ── 行1：新品时间范围 ──────────────────────────────────────────────────
+        range_row = tk.Frame(ctrl_card, bg=BG2)
+        range_row.pack(fill="x", padx=14, pady=(0, 6))
+
+        _label(range_row, "新品时间范围：", size=9, fg=FG2, bg=BG2).pack(
+            side="left", padx=(0, 6))
+
+        # 快捷选项：天数 → 标签
+        _RANGE_OPTIONS = [
+            (1,  "与昨日对比"),
+            (7,  "最近  7 天"),
+            (14, "最近 14 天"),
+            (30, "最近 30 天"),
+            (90, "最近 90 天"),
+        ]
+        self._range_btns: dict[int, tk.Button] = {}
+        saved_days = self.settings.get("new_product_days", 30)
+
+        for days, label in _RANGE_OPTIONS:
+            b = tk.Button(
+                range_row, text=label,
+                font=("微软雅黑", 9), relief="flat", cursor="hand2",
+                padx=10, pady=4, bd=0,
+                bg=ACCENT if days == saved_days else BG3,
+                fg="white" if days == saved_days else FG,
+                activebackground=ACCENT2, activeforeground="white",
+                command=lambda d=days: self._set_range(d),
+            )
+            b.pack(side="left", padx=(0, 4))
+            self._range_btns[days] = b
+
+        # 自定义天数
+        _label(range_row, "  自定义：", size=9, fg=FG2, bg=BG2).pack(side="left")
+        self.custom_days_var = tk.StringVar(
+            value="" if saved_days in dict(_RANGE_OPTIONS) else str(saved_days))
+        custom_e = _entry(range_row, self.custom_days_var, font=("Consolas", 10))
+        custom_e.pack(side="left", ipady=3, ipadx=4)
+        custom_e.config(width=5)
+        _label(range_row, " 天", size=9, fg=FG2, bg=BG2).pack(side="left")
+        _btn(range_row, "确定", self._apply_custom_range, bg=BG3).pack(
+            side="left", padx=(4, 0))
+
+        # ── 行2：定时时间 + 操作按钮 ─────────────────────────────────────────
         row = tk.Frame(ctrl_card, bg=BG2)
         row.pack(fill="x", padx=14, pady=(0, 12))
 
-        # 时间选择
+        # 定时时间选择
         tbox = tk.Frame(row, bg=BG2)
         tbox.pack(side="left")
-        _label(tbox, "每日运行时间（24小时制）", size=9, fg=FG2, bg=BG2).pack(anchor="w")
+        _label(tbox, "每日定时运行（24小时制）", size=9, fg=FG2, bg=BG2).pack(anchor="w")
         tinner = tk.Frame(tbox, bg=BG3,
                           highlightthickness=1, highlightbackground=BORDER)
         tinner.pack(anchor="w", pady=4)
@@ -578,7 +622,7 @@ class App(tk.Tk):
         _spin(tinner, self.min_var, 0, 59, self._on_time_change).pack(
             side="left", padx=(0, 8), pady=4)
 
-        # 按钮组
+        # 操作按钮
         btns = tk.Frame(row, bg=BG2)
         btns.pack(side="right")
         _btn(btns, "▶  立即采集", self._run_now, bg=GREEN, fg="#1e1e2e").pack(
@@ -642,6 +686,29 @@ class App(tk.Tk):
             self._refresh_seller_list()
             logging.info("已删除店铺：%s", s["id"])
 
+    # ── 新品时间范围 ──────────────────────────────────────────────────────────
+
+    def _set_range(self, days: int):
+        self.settings["new_product_days"] = days
+        save_settings(self.settings)
+        for d, btn in self._range_btns.items():
+            btn.config(bg=ACCENT if d == days else BG3,
+                       fg="white" if d == days else FG)
+        self.custom_days_var.set("")
+        logging.info("新品时间范围已设置为：过去 %d 天", days)
+
+    def _apply_custom_range(self):
+        raw = self.custom_days_var.get().strip()
+        if not raw.isdigit() or int(raw) < 1:
+            messagebox.showwarning("输入错误", "请输入大于 0 的整数天数。")
+            return
+        days = int(raw)
+        self.settings["new_product_days"] = days
+        save_settings(self.settings)
+        for btn in self._range_btns.values():
+            btn.config(bg=BG3, fg=FG)   # 取消快捷按钮高亮
+        logging.info("新品时间范围已设置为：过去 %d 天（自定义）", days)
+
     # ── 采集 ──────────────────────────────────────────────────────────────────
 
     def _run_now(self):
@@ -657,10 +724,11 @@ class App(tk.Tk):
         self._scraper_thread.start()
 
     def _scraper_worker(self, seller_ids: list[str]):
-        self._set_status("采集中...", GREEN)
+        days_back = self.settings.get("new_product_days", 30)
+        self._set_status(f"采集中（新品范围：{days_back}天）...", GREEN)
         try:
             from amazon_scraper.main import run_once
-            run_once(seller_ids)
+            run_once(seller_ids, days_back=days_back)
         except ImportError as e:
             logging.error("依赖缺失：%s", e)
         except Exception as e:
@@ -698,7 +766,7 @@ class App(tk.Tk):
         t = self.settings["schedule_time"]
         schedule_lib.clear()
         schedule_lib.every().day.at(t).do(
-            lambda: self._scraper_worker(ids))
+            lambda: self._scraper_worker(list(ids)))
         self._scheduler_running = True
         self.settings["schedule_enabled"] = True
         save_settings(self.settings)

@@ -27,7 +27,8 @@ def _setup_logging() -> None:
     )
 
 
-def run_once(seller_ids: list[str] | None = None) -> None:
+def run_once(seller_ids: list[str] | None = None,
+             days_back: int | None = None) -> None:
     _setup_logging()
     logger = logging.getLogger(__name__)
 
@@ -35,6 +36,9 @@ def run_once(seller_ids: list[str] | None = None) -> None:
     if not ids:
         logger.error("未配置店铺ID，请在设置中添加店铺。")
         sys.exit(1)
+
+    lookback = days_back if days_back is not None else config.NEW_PRODUCT_DAYS
+    logger.info("新品判断范围：过去 %d 天", lookback)
 
     init_db()
     today = date.today()
@@ -47,7 +51,8 @@ def run_once(seller_ids: list[str] | None = None) -> None:
             products = scrape_seller(seller_id)
             save_snapshot(seller_id, products, today)
 
-            new = find_new_products(seller_id, products, today)
+            new = find_new_products(seller_id, products, today,
+                                    days_back=lookback)
             new_asins = {p["asin"] for p in new}
             all_new.extend(new)
 

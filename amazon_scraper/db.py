@@ -149,6 +149,24 @@ def log_run(seller_id: str, total: int, new: int,
         )
 
 
+# ── New-product detection query ──────────────────────────────────────────────
+
+def get_known_asins(seller_id: str, days_back: int,
+                    ref_date: date | None = None) -> set[str]:
+    """Return all ASINs seen for this seller in the past `days_back` days."""
+    ref = ref_date or date.today()
+    from datetime import timedelta
+    cutoff = (ref - timedelta(days=days_back)).isoformat()
+    ref_str = ref.isoformat()
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT DISTINCT asin FROM products "
+            "WHERE seller_id=? AND scraped_date BETWEEN ? AND ?",
+            (seller_id, cutoff, ref_str),
+        ).fetchall()
+    return {r[0] for r in rows}
+
+
 # ── Stats queries (used by GUI) ───────────────────────────────────────────────
 
 def get_stats() -> dict:

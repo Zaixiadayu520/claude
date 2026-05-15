@@ -14,7 +14,9 @@ AMAZON_DOMAIN = "amazon.com"
 MARKETPLACE_ID = "ATVPDKIKX0ER"   # US marketplace
 
 # ── New-product detection ─────────────────────────────────────────────────────
-# Products are flagged as "new" if absent from yesterday's snapshot for that seller.
+# Products are flagged as "new" if their ASIN was not seen within the past
+# NEW_PRODUCT_DAYS days.  Set to 1 to compare against yesterday only.
+NEW_PRODUCT_DAYS = 30
 
 # ── Output ────────────────────────────────────────────────────────────────────
 DATA_DIR = "data"           # daily snapshots and output CSVs go here
