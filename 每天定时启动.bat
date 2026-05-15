@@ -1,30 +1,29 @@
 @echo off
-chcp 65001 >nul
-title 亚马逊新品采集器（每天08:00自动运行）
+title Amazon Scraper - Daily Schedule (08:00)
 
 cd /d "%~dp0"
 
 echo ================================================
-echo   亚马逊新品采集器 - 每天 08:00 自动采集
-echo   保持此窗口开启，勿关闭
+echo   Amazon Scraper - Runs daily at 08:00
+echo   Keep this window open.
 echo ================================================
 echo.
 
 python --version >nul 2>&1
 if errorlevel 1 (
-    echo [错误] 未检测到 Python
+    echo [ERROR] Python not found.
     pause
     exit /b 1
 )
 
 python -c "import requests, bs4, lxml, schedule" >nul 2>&1
 if errorlevel 1 (
-    echo [提示] 正在安装依赖...
+    echo [INFO] Installing dependencies...
     pip install requests beautifulsoup4 lxml schedule -q
 )
 
-echo [运行中] 等待每天 08:00 自动执行采集...
-echo [提示]   结果保存在 data\ 文件夹
+echo [RUNNING] Waiting for 08:00 to start scraping...
+echo [INFO]    Results saved in data\ folder.
 echo.
 
 python run_scraper.py --schedule
