@@ -23,8 +23,10 @@ DEFAULT_SETTINGS = {
     "sellers": [],
     "schedule_time": "08:00",
     "schedule_enabled": False,
-    "new_product_days": 30,
-    "fetch_listing_date": False,   # 采集上架日期（需访问详情页，较慢）
+    "listing_preset": "最近30天",   # 上架时间预设
+    "listing_date_start": "",       # 自定义上架起始日期 YYYY-MM-DD
+    "listing_date_end":   "",       # 自定义上架结束日期 YYYY-MM-DD
+    "fetch_listing_date": True,     # 采集上架日期（访问详情页）
 }
 
 # ── 配色 ──────────────────────────────────────────────────────────────────────
@@ -701,47 +703,51 @@ class App(tk.Tk):
         _label(ctrl_card, "  采集设置", size=10, bold=True, bg=BG2).pack(
             anchor="w", padx=4, pady=(10, 4))
 
-        # ── 行1：新品时间范围 ──────────────────────────────────────────────────
+        # ── 行1：上架时间选择 ─────────────────────────────────────────────────
         range_row = tk.Frame(ctrl_card, bg=BG2)
-        range_row.pack(fill="x", padx=14, pady=(0, 6))
+        range_row.pack(fill="x", padx=14, pady=(0, 2))
 
-        _label(range_row, "新品时间范围：", size=9, fg=FG2, bg=BG2).pack(
+        _label(range_row, "上架时间选择：", size=9, fg=FG2, bg=BG2).pack(
             side="left", padx=(0, 6))
 
-        # 快捷选项：天数 → 标签
-        _RANGE_OPTIONS = [
-            (1,  "与昨日对比"),
-            (7,  "最近  7 天"),
-            (14, "最近 14 天"),
-            (30, "最近 30 天"),
-            (90, "最近 90 天"),
-        ]
-        self._range_btns: dict[int, tk.Button] = {}
-        saved_days = self.settings.get("new_product_days", 30)
+        _LISTING_PRESETS = ["最近7天", "最近30天", "最近90天", "今年", "全部"]
+        self._listing_btns: dict[str, tk.Button] = {}
+        saved_preset = self.settings.get("listing_preset", "最近30天")
 
-        for days, label in _RANGE_OPTIONS:
+        for label in _LISTING_PRESETS:
             b = tk.Button(
                 range_row, text=label,
                 font=("微软雅黑", 9), relief="flat", cursor="hand2",
                 padx=10, pady=4, bd=0,
-                bg=ACCENT if days == saved_days else BG3,
-                fg="white" if days == saved_days else FG,
+                bg=ACCENT if label == saved_preset else BG3,
+                fg="white" if label == saved_preset else FG,
                 activebackground=ACCENT2, activeforeground="white",
-                command=lambda d=days: self._set_range(d),
+                command=lambda l=label: self._set_listing_preset(l),
             )
             b.pack(side="left", padx=(0, 4))
-            self._range_btns[days] = b
+            self._listing_btns[label] = b
 
-        # 自定义天数
+        # 自定义日期范围
         _label(range_row, "  自定义：", size=9, fg=FG2, bg=BG2).pack(side="left")
-        self.custom_days_var = tk.StringVar(
-            value="" if saved_days in dict(_RANGE_OPTIONS) else str(saved_days))
-        custom_e = _entry(range_row, self.custom_days_var, font=("Consolas", 10))
-        custom_e.pack(side="left", ipady=3, ipadx=4)
-        custom_e.config(width=5)
-        _label(range_row, " 天", size=9, fg=FG2, bg=BG2).pack(side="left")
-        _btn(range_row, "确定", self._apply_custom_range, bg=BG3).pack(
+        self.listing_start_var = tk.StringVar(
+            value=self.settings.get("listing_date_start", ""))
+        self.listing_end_var = tk.StringVar(
+            value=self.settings.get("listing_date_end", ""))
+        s_e = _entry(range_row, self.listing_start_var, font=("Consolas", 9))
+        s_e.config(width=11); s_e.pack(side="left", ipady=3, padx=(2, 0))
+        _label(range_row, " ~ ", size=9, fg=FG2, bg=BG2).pack(side="left")
+        e_e = _entry(range_row, self.listing_end_var, font=("Consolas", 9))
+        e_e.config(width=11); e_e.pack(side="left", ipady=3)
+        _label(range_row, " (YYYY-MM-DD)", size=8, fg=FG2, bg=BG2).pack(side="left")
+        _btn(range_row, "确定", self._apply_listing_custom, bg=BG3).pack(
             side="left", padx=(4, 0))
+
+        # 提示行
+        hint_row = tk.Frame(ctrl_card, bg=BG2)
+        hint_row.pack(fill="x", padx=14, pady=(0, 4))
+        _label(hint_row,
+               "※ 按产品上架日期（Date First Available）筛选新品，建议同时开启下方"采集上架日期"",
+               size=8, fg=FG2, bg=BG2).pack(side="left")
 
         # ── 行2：定时时间 + 操作按钮 ─────────────────────────────────────────
         row = tk.Frame(ctrl_card, bg=BG2)
@@ -766,7 +772,7 @@ class App(tk.Tk):
 
         # 采集上架日期开关
         self.fetch_date_var = tk.BooleanVar(
-            value=self.settings.get("fetch_listing_date", False))
+            value=self.settings.get("fetch_listing_date", True))
         tk.Checkbutton(
             tbox,
             text="✅ 采集上架日期+月销量（访问详情页，数据更准确）",
@@ -840,28 +846,55 @@ class App(tk.Tk):
             self._refresh_seller_list()
             logging.info("已删除店铺：%s", s["id"])
 
-    # ── 新品时间范围 ──────────────────────────────────────────────────────────
+    # ── 上架时间选择 ──────────────────────────────────────────────────────────
 
-    def _set_range(self, days: int):
-        self.settings["new_product_days"] = days
+    def _listing_date_range(self, preset: str):
+        """Return (start_iso, end_iso) for the given preset label."""
+        from datetime import date, timedelta
+        today = date.today()
+        mapping = {
+            "最近7天":  (today - timedelta(days=6),  today),
+            "最近30天": (today - timedelta(days=29), today),
+            "最近90天": (today - timedelta(days=89), today),
+            "今年":     (date(today.year, 1, 1),     today),
+            "全部":     (date(2000, 1, 1),            today),
+        }
+        s, e = mapping.get(preset, (date(2000, 1, 1), today))
+        return s.isoformat(), e.isoformat()
+
+    def _set_listing_preset(self, label: str):
+        start, end = self._listing_date_range(label)
+        self.settings["listing_preset"]    = label
+        self.settings["listing_date_start"] = start
+        self.settings["listing_date_end"]   = end
         save_settings(self.settings)
-        for d, btn in self._range_btns.items():
-            btn.config(bg=ACCENT if d == days else BG3,
-                       fg="white" if d == days else FG)
-        self.custom_days_var.set("")
-        logging.info("新品时间范围已设置为：过去 %d 天", days)
+        for lbl, btn in self._listing_btns.items():
+            btn.config(bg=ACCENT if lbl == label else BG3,
+                       fg="white" if lbl == label else FG)
+        self.listing_start_var.set(start)
+        self.listing_end_var.set(end)
+        logging.info("上架时间筛选：%s  (%s ~ %s)", label, start, end)
 
-    def _apply_custom_range(self):
-        raw = self.custom_days_var.get().strip()
-        if not raw.isdigit() or int(raw) < 1:
-            messagebox.showwarning("输入错误", "请输入大于 0 的整数天数。")
+    def _apply_listing_custom(self):
+        start = self.listing_start_var.get().strip()
+        end   = self.listing_end_var.get().strip()
+        try:
+            from datetime import datetime as _dt
+            _dt.strptime(start, "%Y-%m-%d")
+            _dt.strptime(end,   "%Y-%m-%d")
+        except ValueError:
+            messagebox.showwarning("输入错误", "请输入正确日期格式（YYYY-MM-DD）。")
             return
-        days = int(raw)
-        self.settings["new_product_days"] = days
+        if start > end:
+            messagebox.showwarning("输入错误", "起始日期不能晚于结束日期。")
+            return
+        self.settings["listing_preset"]    = "自定义"
+        self.settings["listing_date_start"] = start
+        self.settings["listing_date_end"]   = end
         save_settings(self.settings)
-        for btn in self._range_btns.values():
-            btn.config(bg=BG3, fg=FG)   # 取消快捷按钮高亮
-        logging.info("新品时间范围已设置为：过去 %d 天（自定义）", days)
+        for btn in self._listing_btns.values():
+            btn.config(bg=BG3, fg=FG)
+        logging.info("上架时间筛选（自定义）：%s ~ %s", start, end)
 
     # ── 采集 ──────────────────────────────────────────────────────────────────
 
@@ -882,16 +915,26 @@ class App(tk.Tk):
         save_settings(self.settings)
 
     def _scraper_worker(self, seller_ids: list[str]):
-        days_back   = self.settings.get("new_product_days", 30)
-        fetch_dates = self.settings.get("fetch_listing_date", False)
-        self._set_status(f"列表页采集中...", GREEN)
+        fetch_dates   = self.settings.get("fetch_listing_date", True)
+        listing_start = self.settings.get("listing_date_start", "")
+        listing_end   = self.settings.get("listing_date_end",   "")
+
+        # If no date range stored yet, compute from preset
+        if not listing_start or not listing_end:
+            preset = self.settings.get("listing_preset", "最近30天")
+            listing_start, listing_end = self._listing_date_range(preset)
+
+        self._set_status("列表页采集中...", GREEN)
 
         def progress_cb(done: int, total: int):
             self._set_status(f"详情页 {done}/{total}...", YELLOW)
 
         try:
             from amazon_scraper.main import run_once
-            run_once(seller_ids, days_back=days_back, fetch_dates=fetch_dates,
+            run_once(seller_ids,
+                     listing_date_start=listing_start,
+                     listing_date_end=listing_end,
+                     fetch_dates=fetch_dates,
                      progress_cb=progress_cb if fetch_dates else None)
         except ImportError as e:
             logging.error("依赖缺失：%s", e)

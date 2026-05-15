@@ -14,9 +14,9 @@ AMAZON_DOMAIN = "amazon.com"
 MARKETPLACE_ID = "ATVPDKIKX0ER"   # US marketplace
 
 # ── New-product detection ─────────────────────────────────────────────────────
-# Products are flagged as "new" if their ASIN was not seen within the past
-# NEW_PRODUCT_DAYS days.  Set to 1 to compare against yesterday only.
-NEW_PRODUCT_DAYS = 30
+# Products are flagged as "new" based on their date_first_available field.
+# Default range: past 30 days.  Overridden by GUI listing date selector.
+NEW_PRODUCT_DAYS = 30  # kept for CLI backward compatibility
 
 # ── Output ────────────────────────────────────────────────────────────────────
 DATA_DIR = "data"           # daily snapshots and output CSVs go here

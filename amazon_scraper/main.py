@@ -9,8 +9,8 @@ from pathlib import Path
 
 from . import config
 from .scraper import scrape_seller, batch_enrich_products
-from .storage import save_snapshot, find_new_products, append_new_products
-from .db import init_db, upsert_products, log_run, get_known_asins
+from .storage import save_snapshot, append_new_products
+from .db import init_db, upsert_products, log_run
 
 
 def _setup_logging() -> None:
@@ -29,17 +29,31 @@ def _setup_logging() -> None:
         root.addHandler(h)
 
 
+def _filter_by_listing_date(products: list[dict],
+                            start: str, end: str) -> set[str]:
+    """Return ASINs whose date_first_available falls within [start, end]."""
+    matched: set[str] = set()
+    for p in products:
+        dfa = (p.get("date_first_available") or "").strip()
+        if dfa and start <= dfa <= end:
+            matched.add(p["asin"])
+    return matched
+
+
 def run_once(seller_ids: list[str] | None = None,
-             days_back: int | None = None,
-             fetch_dates: bool = False,
+             listing_date_start: str | None = None,
+             listing_date_end:   str | None = None,
+             fetch_dates: bool = True,
              progress_cb=None) -> None:
     """
     Full scrape cycle.
 
-    fetch_dates=True  → after listing pages are done, visit each product's
-                        detail page to obtain date_first_available and
-                        monthly_sales (for products that don't have them yet).
-    progress_cb       → optional callable(done, total) for GUI progress bar.
+    listing_date_start/end → ISO date strings (YYYY-MM-DD).  Products whose
+                             date_first_available falls in this range are
+                             flagged as new.  Defaults to past 30 days.
+    fetch_dates=True       → visit each product's detail page to collect
+                             date_first_available and monthly_sales.
+    progress_cb            → optional callable(done, total) for GUI progress.
     """
     logger = logging.getLogger(__name__)
 
@@ -48,34 +62,33 @@ def run_once(seller_ids: list[str] | None = None,
         logger.error("未配置店铺ID，请在设置中添加店铺。")
         sys.exit(1)
 
-    lookback = days_back if days_back is not None else config.NEW_PRODUCT_DAYS
-    logger.info("新品判断范围：过去 %d 天", lookback)
+    # Resolve date range
+    if not listing_date_start or not listing_date_end:
+        from datetime import timedelta
+        listing_date_end   = date.today().isoformat()
+        listing_date_start = (date.today() - timedelta(days=29)).isoformat()
+
+    logger.info("上架时间筛选范围：%s ~ %s", listing_date_start, listing_date_end)
     if fetch_dates:
         logger.info("已开启采集上架日期（将访问详情页）")
 
     init_db()
-    today    = date.today()
-    all_new: list[dict] = []
-    # Collect all products across sellers so we do one batched detail fetch
+    today = date.today()
     all_products_for_enrich: list[dict] = []
+    all_sellers_products: list[tuple[str, list[dict]]] = []
 
     for seller_id in ids:
         started_at = datetime.now()
         try:
             products = scrape_seller(seller_id)
             save_snapshot(seller_id, products, today)
-
-            new      = find_new_products(seller_id, products, today, days_back=lookback)
-            new_asins = {p["asin"] for p in new}
-            all_new.extend(new)
-
+            all_sellers_products.append((seller_id, products))
             if fetch_dates:
                 all_products_for_enrich.extend(products)
             else:
-                # Still upsert what we have from listing pages
-                upsert_products(products, new_asins, today)
-
-            log_run(seller_id, len(products), len(new), started_at)
+                # Upsert with empty new_asins for now; update after date filter
+                upsert_products(products, set(), today)
+            log_run(seller_id, len(products), 0, started_at)
         except Exception:
             logger.exception("采集店铺 %s 时发生错误", seller_id)
             log_run(seller_id, 0, 0, started_at, status="error")
@@ -86,16 +99,22 @@ def run_once(seller_ids: list[str] | None = None,
         batch_enrich_products(all_products_for_enrich,
                               max_workers=config.CONCURRENT_PAGES,
                               progress_cb=progress_cb)
-        # Now upsert enriched products (one seller at a time)
-        from itertools import groupby
-        keyfn = lambda p: p.get("seller_id", "")
-        for sid, grp in groupby(sorted(all_products_for_enrich, key=keyfn), keyfn):
-            prods    = list(grp)
-            new_asns = {p["asin"] for p in all_new if p.get("seller_id") == sid}
-            upsert_products(prods, new_asns, today)
+
+    # ── Apply listing date filter and upsert ──────────────────────────────────
+    all_new: list[dict] = []
+    for seller_id, products in all_sellers_products:
+        new_asins = _filter_by_listing_date(
+            products, listing_date_start, listing_date_end)
+        new = [p for p in products if p["asin"] in new_asins]
+        all_new.extend(new)
+        logger.info("店铺 %s：发现 %d 个新上架产品（%s ~ %s）",
+                    seller_id, len(new), listing_date_start, listing_date_end)
+        upsert_products(products, new_asins, today)
+        # Update run record with correct new count
+        log_run(seller_id, len(products), len(new), datetime.now())
 
     if all_new:
         out_path = append_new_products(all_new, today)
-        logger.info("完成。共发现 %d 个新产品，已保存至 %s", len(all_new), out_path)
+        logger.info("完成。共发现 %d 个新上架产品，已保存至 %s", len(all_new), out_path)
     else:
-        logger.info("完成。今日未发现新产品。")
+        logger.info("完成。所选上架时间范围内未发现新产品。")
