@@ -42,6 +42,12 @@ def _build_session() -> requests.Session:
         "Accept-Encoding": "gzip, deflate, br",
         "Connection": "keep-alive",
         "Cache-Control": "no-cache",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-User": "?1",
+        "Upgrade-Insecure-Requests": "1",
+        "DNT": "1",
     })
     # Force USD pricing regardless of geo-IP location
     s.cookies.set("i18n-prefs",       "USD",  domain=".amazon.com")
@@ -80,6 +86,30 @@ def _clean(text: Optional[str]) -> str:
     if not text:
         return ""
     return re.sub(r"\s+", " ", text).strip()
+
+
+_MONTH_MAP = {
+    "january":"01","february":"02","march":"03","april":"04",
+    "may":"05","june":"06","july":"07","august":"08",
+    "september":"09","october":"10","november":"11","december":"12",
+}
+
+
+def _normalize_date(raw: str) -> str:
+    """Convert 'November 9, 2022' → '2022-11-09'. Returns raw if unparseable."""
+    s = raw.strip()
+    if not s:
+        return ""
+    # Already ISO
+    if re.match(r"^\d{4}-\d{2}-\d{2}", s):
+        return s[:10]
+    # "Month D, YYYY" or "Month DD YYYY"
+    m = re.match(r"([A-Za-z]+)\s+(\d{1,2}),?\s+(\d{4})", s)
+    if m:
+        mo = _MONTH_MAP.get(m.group(1).lower())
+        if mo:
+            return f"{m.group(3)}-{mo}-{m.group(2).zfill(2)}"
+    return s
 
 
 # ── Phase 1: listing page extraction ─────────────────────────────────────────
@@ -318,7 +348,7 @@ def _extract_date_first_available(soup: BeautifulSoup) -> str:
             date_part = re.sub(r".*Date First Available\s*[:‏]*\s*", "", text,
                                flags=re.IGNORECASE).strip()
             if date_part:
-                return date_part
+                return _normalize_date(date_part)
 
     # Pattern 2: product details table rows
     for row in soup.select("tr"):
@@ -326,34 +356,44 @@ def _extract_date_first_available(soup: BeautifulSoup) -> str:
         for i, cell in enumerate(cells):
             if keyword in cell.get_text():
                 if i + 1 < len(cells):
-                    return _clean(cells[i + 1].get_text())
+                    return _normalize_date(_clean(cells[i + 1].get_text()))
 
     # Pattern 3: tech details table (some categories)
     for row in soup.select(".a-keyvalue tr, .prodDetTable tr"):
         label = row.select_one("th, td:first-child")
         value = row.select_one("td:last-child")
         if label and value and keyword in label.get_text():
-            return _clean(value.get_text())
+            return _normalize_date(_clean(value.get_text()))
 
     # Pattern 4: plain text regex fallback
     m = re.search(
         r"Date First Available\s*[:‏]*\s*([A-Za-z]+ \d{1,2},\s*\d{4})",
         soup.get_text(), re.IGNORECASE,
     )
-    return _clean(m.group(1)) if m else ""
+    return _normalize_date(_clean(m.group(1))) if m else ""
 
 
 def _extract_monthly_sales_detail(soup: BeautifulSoup) -> str:
     """Extract monthly sales from a product detail page (more reliable than listing page)."""
     full_text = soup.get_text(" ", strip=True)
     m = re.search(
-        r"([\d,]+(?:\.\d+)?[KkMm]?\+?)\s+(?:purchased|bought) in (?:the )?past month",
+        r"([\d,]+(?:\.\d+)?[KkMm]?\+?)\s+(?:purchased|bought)\s+(?:in\s+)?(?:the\s+)?past\s+month",
         full_text, re.IGNORECASE,
     )
     if not m:
+        m = re.search(
+            r"([\d,]+[KkMm]?)\+?\s+people\s+(?:purchased|bought)",
+            full_text, re.IGNORECASE,
+        )
+    if not m:
         # Amazon sometimes shows it as a badge in a specific element
-        for tag in soup.select("span.social-proofing-faceout-title-text, "
-                                "span[id*='social-proof']"):
+        for tag in soup.select(
+            "span.social-proofing-faceout-title-text, "
+            "span[id*='social-proof'], "
+            "span[data-csa-c-content-id*='social'], "
+            ".social-proofing-faceout span, "
+            "#socialProofingAsinFaceout_feature_div span"
+        ):
             badge_m = re.search(
                 r"([\d,KkMm]+\+?)\s+(?:purchased|bought)", tag.get_text(), re.I)
             if badge_m:

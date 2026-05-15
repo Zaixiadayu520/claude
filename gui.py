@@ -201,6 +201,8 @@ class DBViewerDialog(tk.Toplevel):
         self.configure(bg=BG)
         self.grab_set()
         self._zh_cache: dict[str, str] = {}
+        self._img_cache: dict[str, object] = {}   # asin -> ImageTk.PhotoImage
+        self._placeholder_img = None
         self._date_mode = tk.StringVar(value="scraped")   # "scraped" or "listed"
         self._build()
         self._apply_quick("最近30天")
@@ -294,7 +296,9 @@ class DBViewerDialog(tk.Toplevel):
                   foreground=[("selected", "white")])
 
         self.tree = ttk.Treeview(frame, columns=col_ids,
-                                 show="headings", style="Dark.Treeview")
+                                 show="tree headings", style="Dark.Treeview")
+        self.tree.column("#0", width=60, minwidth=60, anchor="center", stretch=False)
+        self.tree.heading("#0", text="主图")
         for cid, lbl, w in self.COLS:
             self.tree.heading(cid, text=lbl,
                               command=lambda c=cid: self._sort_by(c))
@@ -382,7 +386,8 @@ class DBViewerDialog(tk.Toplevel):
             # Simpler: just select what we need
             db_cols = ["asin","url","title","brand","price",
                        "monthly_sales","rating","review_count","prime",
-                       "date_first_available","seller_id","scraped_date","is_new"]
+                       "date_first_available","seller_id","scraped_date","is_new",
+                       "main_image_url"]
             select_parts = [c if c in existing_cols else f"'' AS {c}"
                             for c in db_cols]
             where = "WHERE " + " AND ".join(conditions)
@@ -393,6 +398,7 @@ class DBViewerDialog(tk.Toplevel):
 
             self._rows_cache = [dict(zip(db_cols, r)) for r in rows]
             self.tree.delete(*self.tree.get_children())
+            thumb_jobs: list[tuple[str, str, str]] = []   # (iid, url, asin)
             for rd in self._rows_cache:
                 zh = self._zh_cache.get(rd["asin"], "")
                 vals = (
@@ -404,8 +410,18 @@ class DBViewerDialog(tk.Toplevel):
                     "✓" if str(rd["is_new"]) == "1" else "",
                 )
                 tag = "new" if str(rd["is_new"]) == "1" else ""
-                self.tree.insert("", "end", values=vals, tags=(tag,))
+                # Use cached image if available
+                cached_img = self._img_cache.get(rd["asin"])
+                iid = self.tree.insert("", "end",
+                                       image=cached_img or "",
+                                       values=vals, tags=(tag,))
+                if not cached_img and rd.get("main_image_url"):
+                    thumb_jobs.append((iid, rd["main_image_url"], rd["asin"]))
             self.tree.tag_configure("new", foreground=GREEN)
+            if thumb_jobs:
+                threading.Thread(
+                    target=self._load_thumbnails,
+                    args=(thumb_jobs,), daemon=True).start()
             self.count_label.config(
                 text=f"共 {len(rows)} 条  [{start} ~ {end}]  ({date_col})")
         except Exception as exc:
@@ -504,6 +520,42 @@ class DBViewerDialog(tk.Toplevel):
             self.tree.move(k, "", idx)
         self._sort_col = col
         self._sort_asc = asc
+
+    # ── 缩略图加载 ────────────────────────────────────────────────────────────
+
+    def _load_thumbnails(self, jobs: list[tuple[str, str, str]]):
+        """Download and set thumbnails for treeview items (background thread)."""
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
+            futs = {pool.submit(self._load_one_thumb, iid, url, asin): iid
+                    for iid, url, asin in jobs}
+            for _ in concurrent.futures.as_completed(futs):
+                pass
+
+    def _load_one_thumb(self, iid: str, url: str, asin: str):
+        if asin in self._img_cache or not url:
+            return
+        try:
+            from PIL import Image, ImageTk
+            import urllib.request, io
+            req = urllib.request.Request(
+                url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=8) as r:
+                data = r.read()
+            img = Image.open(io.BytesIO(data)).convert("RGB")
+            img.thumbnail((52, 52), Image.LANCZOS)
+            photo = ImageTk.PhotoImage(img)
+            self._img_cache[asin] = photo
+            self.after(0, lambda iid=iid, photo=photo:
+                       self._set_thumb(iid, photo))
+        except Exception:
+            pass
+
+    def _set_thumb(self, iid: str, photo):
+        try:
+            self.tree.item(iid, image=photo)
+        except Exception:
+            pass
 
     # ── 导出 CSV ──────────────────────────────────────────────────────────────
 
