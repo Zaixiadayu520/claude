@@ -1,5 +1,5 @@
 """
-Amazon New Product Scraper - GUI Application
+亚马逊新品采集器 — 图形界面（中文版）
 """
 import tkinter as tk
 from tkinter import ttk, messagebox, scrolledtext
@@ -9,46 +9,44 @@ import os
 import sys
 import queue
 import logging
-import schedule as schedule_lib
 import time
 from pathlib import Path
 from datetime import datetime
 
-# ── Paths ─────────────────────────────────────────────────────────────────────
-BASE_DIR = Path(__file__).parent
-SETTINGS_FILE = BASE_DIR / "settings.json"
-DATA_DIR = BASE_DIR / "data"
+import schedule as schedule_lib
 
-# ── Default settings ──────────────────────────────────────────────────────────
+BASE_DIR     = Path(__file__).parent
+SETTINGS_FILE = BASE_DIR / "settings.json"
+DATA_DIR     = BASE_DIR / "data"
+
 DEFAULT_SETTINGS = {
     "sellers": [],
     "schedule_time": "08:00",
     "schedule_enabled": False,
 }
 
-# ── Colors ────────────────────────────────────────────────────────────────────
-BG        = "#1e1e2e"
-BG2       = "#2a2a3e"
-BG3       = "#313145"
-ACCENT    = "#7c6af7"
-ACCENT2   = "#5a4fcf"
-GREEN     = "#50fa7b"
-RED       = "#ff5555"
-YELLOW    = "#f1fa8c"
-FG        = "#cdd6f4"
-FG2       = "#a6adc8"
-BORDER    = "#45475a"
+# ── 配色 ──────────────────────────────────────────────────────────────────────
+BG      = "#1e1e2e"
+BG2     = "#2a2a3e"
+BG3     = "#313145"
+ACCENT  = "#7c6af7"
+ACCENT2 = "#5a4fcf"
+GREEN   = "#50fa7b"
+RED     = "#ff5555"
+YELLOW  = "#f1fa8c"
+CYAN    = "#8be9fd"
+FG      = "#cdd6f4"
+FG2     = "#a6adc8"
+BORDER  = "#45475a"
 
 
-# ── Settings persistence ──────────────────────────────────────────────────────
+# ── 设置持久化 ────────────────────────────────────────────────────────────────
 
 def load_settings() -> dict:
     if SETTINGS_FILE.exists():
         try:
             with open(SETTINGS_FILE, encoding="utf-8") as f:
-                data = json.load(f)
-            # Merge with defaults to handle missing keys
-            return {**DEFAULT_SETTINGS, **data}
+                return {**DEFAULT_SETTINGS, **json.load(f)}
         except Exception:
             pass
     return dict(DEFAULT_SETTINGS)
@@ -59,107 +57,219 @@ def save_settings(settings: dict) -> None:
         json.dump(settings, f, ensure_ascii=False, indent=2)
 
 
-# ── Queue-based log handler ───────────────────────────────────────────────────
+# ── 日志队列 ──────────────────────────────────────────────────────────────────
 
 class QueueHandler(logging.Handler):
-    def __init__(self, log_queue: queue.Queue):
+    def __init__(self, q: queue.Queue):
         super().__init__()
-        self.log_queue = log_queue
+        self.q = q
 
     def emit(self, record):
-        self.log_queue.put(self.format(record))
+        self.q.put(self.format(record))
 
 
-# ── Add Seller Dialog ─────────────────────────────────────────────────────────
+# ── 添加店铺弹窗 ──────────────────────────────────────────────────────────────
 
 class AddSellerDialog(tk.Toplevel):
     def __init__(self, parent):
         super().__init__(parent)
         self.result = None
-        self.title("Add Seller")
+        self.title("添加店铺")
         self.resizable(False, False)
         self.configure(bg=BG2)
         self.grab_set()
+        self.geometry(f"420x230+{parent.winfo_rootx()+160}+{parent.winfo_rooty()+160}")
 
-        # Center on parent
-        self.geometry(f"400x220+{parent.winfo_rootx()+150}+{parent.winfo_rooty()+150}")
-
-        tk.Label(self, text="Add New Seller", font=("Segoe UI", 13, "bold"),
+        tk.Label(self, text="添加新店铺", font=("微软雅黑", 13, "bold"),
                  bg=BG2, fg=FG).pack(pady=(20, 10))
 
         form = tk.Frame(self, bg=BG2)
         form.pack(padx=30, fill="x")
 
-        tk.Label(form, text="Seller ID *", font=("Segoe UI", 9),
-                 bg=BG2, fg=FG2).grid(row=0, column=0, sticky="w", pady=4)
-        self.id_var = tk.StringVar()
-        id_entry = tk.Entry(form, textvariable=self.id_var, font=("Consolas", 10),
-                            bg=BG3, fg=FG, insertbackground=FG, relief="flat",
-                            highlightthickness=1, highlightcolor=ACCENT,
-                            highlightbackground=BORDER)
-        id_entry.grid(row=0, column=1, sticky="ew", padx=(10, 0), pady=4, ipady=4)
-        id_entry.focus()
+        def _row(label, row):
+            tk.Label(form, text=label, font=("微软雅黑", 9),
+                     bg=BG2, fg=FG2).grid(row=row, column=0, sticky="w", pady=5)
 
-        tk.Label(form, text="Nickname", font=("Segoe UI", 9),
-                 bg=BG2, fg=FG2).grid(row=1, column=0, sticky="w", pady=4)
+        _row("卖家 ID *", 0)
+        self.id_var = tk.StringVar()
+        _entry(form, self.id_var, font=("Consolas", 10)).grid(
+            row=0, column=1, sticky="ew", padx=(10, 0), pady=5, ipady=4)
+
+        _row("店铺名称", 1)
         self.name_var = tk.StringVar()
-        name_entry = tk.Entry(form, textvariable=self.name_var, font=("Segoe UI", 10),
-                              bg=BG3, fg=FG, insertbackground=FG, relief="flat",
-                              highlightthickness=1, highlightcolor=ACCENT,
-                              highlightbackground=BORDER)
-        name_entry.grid(row=1, column=1, sticky="ew", padx=(10, 0), pady=4, ipady=4)
+        _entry(form, self.name_var).grid(
+            row=1, column=1, sticky="ew", padx=(10, 0), pady=5, ipady=4)
 
         form.columnconfigure(1, weight=1)
 
-        self.err_label = tk.Label(self, text="", font=("Segoe UI", 8),
-                                  bg=BG2, fg=RED)
-        self.err_label.pack()
+        self.err = tk.Label(self, text="", font=("微软雅黑", 8), bg=BG2, fg=RED)
+        self.err.pack()
 
-        btn_frame = tk.Frame(self, bg=BG2)
-        btn_frame.pack(pady=10)
+        bf = tk.Frame(self, bg=BG2)
+        bf.pack(pady=10)
+        _btn(bf, "取消", self.destroy, bg=BG3).pack(side="left", padx=6)
+        _btn(bf, "确认添加", self._ok, bg=ACCENT).pack(side="left", padx=6)
 
-        _btn(btn_frame, "Cancel", self.destroy, bg=BG3).pack(side="left", padx=6)
-        _btn(btn_frame, "Add Seller", self._confirm, bg=ACCENT).pack(side="left", padx=6)
-
-        self.bind("<Return>", lambda e: self._confirm())
+        self.bind("<Return>", lambda e: self._ok())
         self.bind("<Escape>", lambda e: self.destroy())
 
-    def _confirm(self):
+    def _ok(self):
         sid = self.id_var.get().strip()
         name = self.name_var.get().strip() or sid
         if not sid:
-            self.err_label.config(text="Seller ID is required.")
+            self.err.config(text="卖家 ID 不能为空")
             return
         self.result = {"id": sid, "name": name}
         self.destroy()
 
 
-# ── Helper widgets ────────────────────────────────────────────────────────────
+# ── 数据库查看弹窗 ────────────────────────────────────────────────────────────
 
-def _btn(parent, text, command, bg=BG3, fg=FG, width=None):
-    kw = dict(text=text, command=command, bg=bg, fg=fg,
-              font=("Segoe UI", 9, "bold"), relief="flat", cursor="hand2",
-              padx=14, pady=6, activebackground=ACCENT2, activeforeground="white",
-              bd=0)
-    if width:
-        kw["width"] = width
-    return tk.Button(parent, **kw)
+class DBViewerDialog(tk.Toplevel):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.title("数据库数据查看")
+        self.geometry("1000x560")
+        self.configure(bg=BG)
+        self.grab_set()
+        self._build()
+        self._load()
+
+    def _build(self):
+        top = tk.Frame(self, bg=BG)
+        top.pack(fill="x", padx=12, pady=8)
+
+        tk.Label(top, text="查询条件：", font=("微软雅黑", 9), bg=BG, fg=FG2).pack(side="left")
+
+        self.filter_var = tk.StringVar()
+        e = _entry(top, self.filter_var)
+        e.pack(side="left", padx=6, ipady=3)
+        tk.Label(top, text="（输入 ASIN / 标题 / 品牌 关键词）",
+                 font=("微软雅黑", 8), bg=BG, fg=FG2).pack(side="left")
+
+        self.only_new = tk.BooleanVar()
+        tk.Checkbutton(top, text="只看今日新品", variable=self.only_new,
+                       bg=BG, fg=FG, selectcolor=BG3,
+                       activebackground=BG, activeforeground=FG,
+                       font=("微软雅黑", 9)).pack(side="left", padx=10)
+
+        _btn(top, "查询", self._load, bg=ACCENT).pack(side="left", padx=4)
+        _btn(top, "刷新", self._load, bg=BG3).pack(side="left")
+
+        self.count_label = tk.Label(top, text="", font=("微软雅黑", 9),
+                                    bg=BG, fg=FG2)
+        self.count_label.pack(side="right", padx=10)
+
+        cols = ("asin", "title", "brand", "price", "rating",
+                "review_count", "prime", "seller_id", "scraped_date", "is_new")
+        col_labels = ("ASIN", "标题", "品牌", "价格", "评分",
+                      "评论数", "Prime", "店铺ID", "采集日期", "新品")
+
+        frame = tk.Frame(self, bg=BG)
+        frame.pack(fill="both", expand=True, padx=12, pady=(0, 8))
+
+        style = ttk.Style()
+        style.theme_use("clam")
+        style.configure("Dark.Treeview",
+                        background=BG3, foreground=FG,
+                        fieldbackground=BG3, rowheight=24,
+                        font=("微软雅黑", 9))
+        style.configure("Dark.Treeview.Heading",
+                        background=BG2, foreground=FG,
+                        font=("微软雅黑", 9, "bold"))
+        style.map("Dark.Treeview",
+                  background=[("selected", ACCENT)],
+                  foreground=[("selected", "white")])
+
+        self.tree = ttk.Treeview(frame, columns=cols, show="headings",
+                                 style="Dark.Treeview")
+        widths = (110, 260, 100, 80, 60, 80, 55, 130, 100, 50)
+        for col, label, w in zip(cols, col_labels, widths):
+            self.tree.heading(col, text=label)
+            self.tree.column(col, width=w, anchor="w")
+
+        vsb = ttk.Scrollbar(frame, orient="vertical", command=self.tree.yview)
+        hsb = ttk.Scrollbar(frame, orient="horizontal", command=self.tree.xview)
+        self.tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+
+        self.tree.grid(row=0, column=0, sticky="nsew")
+        vsb.grid(row=0, column=1, sticky="ns")
+        hsb.grid(row=1, column=0, sticky="ew")
+        frame.rowconfigure(0, weight=1)
+        frame.columnconfigure(0, weight=1)
+
+    def _load(self):
+        try:
+            import sqlite3
+            from amazon_scraper.db import DB_PATH
+            if not DB_PATH.exists():
+                messagebox.showinfo("提示", "数据库尚未创建，请先运行一次采集。")
+                return
+            con = sqlite3.connect(str(DB_PATH))
+            keyword = self.filter_var.get().strip()
+            only_new = self.only_new.get()
+
+            conditions = []
+            params: list = []
+            if keyword:
+                conditions.append(
+                    "(asin LIKE ? OR title LIKE ? OR brand LIKE ?)")
+                params += [f"%{keyword}%"] * 3
+            if only_new:
+                conditions.append("is_new=1")
+
+            where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+            sql = f"""
+                SELECT asin, title, brand, price, rating,
+                       review_count, prime, seller_id, scraped_date, is_new
+                FROM products {where}
+                ORDER BY scraped_date DESC, id DESC
+                LIMIT 2000
+            """
+            rows = con.execute(sql, params).fetchall()
+            con.close()
+
+            self.tree.delete(*self.tree.get_children())
+            for row in rows:
+                tag = "new" if row[-1] == 1 else ""
+                self.tree.insert("", "end", values=row, tags=(tag,))
+            self.tree.tag_configure("new", foreground=GREEN)
+            self.count_label.config(text=f"共 {len(rows)} 条记录")
+        except Exception as exc:
+            messagebox.showerror("查询失败", str(exc))
+
+
+# ── 通用小控件 ────────────────────────────────────────────────────────────────
+
+def _btn(parent, text, command, bg=BG3, fg=FG):
+    return tk.Button(parent, text=text, command=command,
+                     bg=bg, fg=fg, font=("微软雅黑", 9, "bold"),
+                     relief="flat", cursor="hand2",
+                     padx=12, pady=5,
+                     activebackground=ACCENT2, activeforeground="white", bd=0)
+
+
+def _entry(parent, textvariable, font=("微软雅黑", 10)):
+    return tk.Entry(parent, textvariable=textvariable, font=font,
+                    bg=BG3, fg=FG, insertbackground=FG, relief="flat",
+                    highlightthickness=1, highlightcolor=ACCENT,
+                    highlightbackground=BORDER)
 
 
 def _label(parent, text, size=9, bold=False, fg=FG, bg=None):
-    font = ("Segoe UI", size, "bold" if bold else "normal")
-    return tk.Label(parent, text=text, font=font, fg=fg,
-                    bg=bg or parent["bg"])
+    return tk.Label(parent, text=text,
+                    font=("微软雅黑", size, "bold" if bold else "normal"),
+                    fg=fg, bg=bg or parent["bg"])
 
 
-# ── Main Application ──────────────────────────────────────────────────────────
+# ── 主应用 ────────────────────────────────────────────────────────────────────
 
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("Amazon New Product Scraper")
-        self.geometry("900x640")
-        self.minsize(800, 560)
+        self.title("亚马逊新品采集器")
+        self.geometry("960x660")
+        self.minsize(820, 580)
         self.configure(bg=BG)
 
         self.settings = load_settings()
@@ -172,23 +282,23 @@ class App(tk.Tk):
         self._build_ui()
         self._refresh_seller_list()
         self._poll_log()
+        self._refresh_stats()
 
-        # Restore schedule state
         if self.settings.get("schedule_enabled"):
             self._start_schedule(silent=True)
 
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
-    # ── Logging ───────────────────────────────────────────────────────────────
+    # ── 日志 ──────────────────────────────────────────────────────────────────
 
     def _setup_logging(self):
-        self._log_handler = QueueHandler(self.log_queue)
-        self._log_handler.setFormatter(
-            logging.Formatter("%(asctime)s [%(levelname)s] %(message)s",
-                              datefmt="%H:%M:%S"))
-        root_logger = logging.getLogger()
-        root_logger.setLevel(logging.INFO)
-        root_logger.addHandler(self._log_handler)
+        handler = QueueHandler(self.log_queue)
+        handler.setFormatter(logging.Formatter(
+            "%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S"))
+        root = logging.getLogger()
+        root.setLevel(logging.INFO)
+        root.handlers.clear()
+        root.addHandler(handler)
 
     def _poll_log(self):
         try:
@@ -205,7 +315,7 @@ class App(tk.Tk):
             tag = "error"
         elif "[WARNING]" in msg:
             tag = "warn"
-        elif "Done" in msg or "new products" in msg.lower():
+        elif "完成" in msg or "新产品" in msg:
             tag = "success"
         else:
             tag = "info"
@@ -213,223 +323,211 @@ class App(tk.Tk):
         self.log_text.see("end")
         self.log_text.configure(state="disabled")
 
-    # ── UI Build ──────────────────────────────────────────────────────────────
+    # ── 构建界面 ──────────────────────────────────────────────────────────────
 
     def _build_ui(self):
-        # ── Header ────────────────────────────────────────────────────────────
-        header = tk.Frame(self, bg=BG2, height=52)
+        # 顶栏
+        header = tk.Frame(self, bg=BG2, height=54)
         header.pack(fill="x")
         header.pack_propagate(False)
-        tk.Label(header, text="🛒  Amazon New Product Scraper",
-                 font=("Segoe UI", 14, "bold"), bg=BG2, fg=FG).pack(
+        tk.Label(header, text="亚马逊  新品采集器",
+                 font=("微软雅黑", 14, "bold"), bg=BG2, fg=FG).pack(
             side="left", padx=20, pady=12)
-        self.status_dot = tk.Label(header, text="●  Idle",
-                                   font=("Segoe UI", 9), bg=BG2, fg=FG2)
+        self.status_dot = tk.Label(header, text="● 待机",
+                                   font=("微软雅黑", 9), bg=BG2, fg=FG2)
         self.status_dot.pack(side="right", padx=20)
 
-        # ── Main body ─────────────────────────────────────────────────────────
         body = tk.Frame(self, bg=BG)
         body.pack(fill="both", expand=True, padx=12, pady=(10, 6))
 
-        # Left panel (sellers)
-        left = tk.Frame(body, bg=BG2, bd=0, relief="flat",
+        # 左侧店铺面板
+        left = tk.Frame(body, bg=BG2,
                         highlightthickness=1, highlightbackground=BORDER)
         left.pack(side="left", fill="y", padx=(0, 8))
         left.pack_propagate(False)
-        left.configure(width=260)
+        left.configure(width=265)
         self._build_seller_panel(left)
 
-        # Right panel (settings + log)
+        # 右侧主面板
         right = tk.Frame(body, bg=BG)
         right.pack(side="left", fill="both", expand=True)
         self._build_right_panel(right)
 
     def _build_seller_panel(self, parent):
-        _label(parent, "  Seller Stores", size=10, bold=True, bg=BG2).pack(
+        _label(parent, "  店铺管理", size=10, bold=True, bg=BG2).pack(
             anchor="w", pady=(14, 6))
 
-        # Seller listbox
-        list_frame = tk.Frame(parent, bg=BG2)
-        list_frame.pack(fill="both", expand=True, padx=10)
+        lf = tk.Frame(parent, bg=BG2)
+        lf.pack(fill="both", expand=True, padx=10)
 
-        scrollbar = tk.Scrollbar(list_frame, bg=BG3, troughcolor=BG2,
-                                 relief="flat", bd=0)
-        scrollbar.pack(side="right", fill="y")
+        sb = tk.Scrollbar(lf, bg=BG3, troughcolor=BG2, relief="flat", bd=0)
+        sb.pack(side="right", fill="y")
 
-        self.seller_listbox = tk.Listbox(
-            list_frame,
-            yscrollcommand=scrollbar.set,
+        self.seller_lb = tk.Listbox(
+            lf, yscrollcommand=sb.set,
             bg=BG3, fg=FG,
             selectbackground=ACCENT, selectforeground="white",
-            font=("Segoe UI", 10),
-            relief="flat", bd=0,
-            highlightthickness=0,
-            activestyle="none",
+            font=("微软雅黑", 10), relief="flat", bd=0,
+            highlightthickness=0, activestyle="none",
         )
-        self.seller_listbox.pack(fill="both", expand=True)
-        scrollbar.config(command=self.seller_listbox.yview)
+        self.seller_lb.pack(fill="both", expand=True)
+        sb.config(command=self.seller_lb.yview)
 
-        # Buttons
-        btn_frame = tk.Frame(parent, bg=BG2)
-        btn_frame.pack(fill="x", padx=10, pady=10)
-
-        _btn(btn_frame, "+ Add Store", self._add_seller,
-             bg=ACCENT).pack(fill="x", pady=(0, 4))
-        _btn(btn_frame, "✕ Remove Selected", self._remove_seller,
-             bg=BG3).pack(fill="x")
+        bf = tk.Frame(parent, bg=BG2)
+        bf.pack(fill="x", padx=10, pady=10)
+        _btn(bf, "+ 添加店铺", self._add_seller, bg=ACCENT).pack(fill="x", pady=(0, 5))
+        _btn(bf, "✕ 删除选中", self._remove_seller).pack(fill="x")
 
     def _build_right_panel(self, parent):
-        # ── Settings card ─────────────────────────────────────────────────────
-        card = tk.Frame(parent, bg=BG2,
-                        highlightthickness=1, highlightbackground=BORDER)
-        card.pack(fill="x", pady=(0, 8))
-
-        _label(card, "  Schedule & Control", size=10, bold=True, bg=BG2).pack(
-            anchor="w", pady=(12, 8), padx=4)
-
-        row1 = tk.Frame(card, bg=BG2)
-        row1.pack(fill="x", padx=14, pady=(0, 10))
-
-        # Time picker
-        time_box = tk.Frame(row1, bg=BG2)
-        time_box.pack(side="left")
-        _label(time_box, "Run Time (24h)", size=9, fg=FG2, bg=BG2).pack(anchor="w")
-        time_inner = tk.Frame(time_box, bg=BG3,
+        # 统计卡片
+        stats_card = tk.Frame(parent, bg=BG2,
                               highlightthickness=1, highlightbackground=BORDER)
-        time_inner.pack(anchor="w", pady=4)
+        stats_card.pack(fill="x", pady=(0, 8))
+        _label(stats_card, "  数据统计", size=10, bold=True, bg=BG2).pack(
+            anchor="w", padx=4, pady=(10, 6))
 
+        sf = tk.Frame(stats_card, bg=BG2)
+        sf.pack(fill="x", padx=14, pady=(0, 12))
+
+        self.stat_vars = {}
+        stats_def = [
+            ("total",   "累计产品数",  CYAN),
+            ("new",     "今日新品",    GREEN),
+            ("sellers", "监控店铺数",  YELLOW),
+            ("last",    "最后采集日期", FG2),
+        ]
+        for key, label, color in stats_def:
+            box = tk.Frame(sf, bg=BG3, padx=14, pady=8)
+            box.pack(side="left", padx=(0, 8), fill="y")
+            var = tk.StringVar(value="—")
+            self.stat_vars[key] = var
+            tk.Label(box, textvariable=var, font=("微软雅黑", 16, "bold"),
+                     bg=BG3, fg=color).pack()
+            _label(box, label, size=8, fg=FG2, bg=BG3).pack()
+
+        # 控制卡片
+        ctrl_card = tk.Frame(parent, bg=BG2,
+                             highlightthickness=1, highlightbackground=BORDER)
+        ctrl_card.pack(fill="x", pady=(0, 8))
+        _label(ctrl_card, "  采集设置", size=10, bold=True, bg=BG2).pack(
+            anchor="w", padx=4, pady=(10, 6))
+
+        row = tk.Frame(ctrl_card, bg=BG2)
+        row.pack(fill="x", padx=14, pady=(0, 12))
+
+        # 时间选择
+        tbox = tk.Frame(row, bg=BG2)
+        tbox.pack(side="left")
+        _label(tbox, "每日运行时间（24小时制）", size=9, fg=FG2, bg=BG2).pack(anchor="w")
+        tinner = tk.Frame(tbox, bg=BG3,
+                          highlightthickness=1, highlightbackground=BORDER)
+        tinner.pack(anchor="w", pady=4)
         h, m = self.settings["schedule_time"].split(":")
         self.hour_var = tk.StringVar(value=h)
-        self.min_var = tk.StringVar(value=m)
-
-        hour_spin = tk.Spinbox(time_inner, from_=0, to=23, width=3,
-                               textvariable=self.hour_var, format="%02.0f",
-                               font=("Consolas", 13, "bold"),
-                               bg=BG3, fg=FG, buttonbackground=BG3,
-                               relief="flat", bd=0, insertbackground=FG,
-                               command=self._on_time_change)
-        hour_spin.pack(side="left", padx=(8, 0), pady=4)
-        tk.Label(time_inner, text=":", font=("Consolas", 13, "bold"),
+        self.min_var  = tk.StringVar(value=m)
+        _spin(tinner, self.hour_var, 0, 23, self._on_time_change).pack(
+            side="left", padx=(8, 0), pady=4)
+        tk.Label(tinner, text=":", font=("Consolas", 13, "bold"),
                  bg=BG3, fg=FG).pack(side="left")
-        min_spin = tk.Spinbox(time_inner, from_=0, to=59, width=3,
-                              textvariable=self.min_var, format="%02.0f",
-                              font=("Consolas", 13, "bold"),
-                              bg=BG3, fg=FG, buttonbackground=BG3,
-                              relief="flat", bd=0, insertbackground=FG,
-                              command=self._on_time_change)
-        min_spin.pack(side="left", padx=(0, 8), pady=4)
+        _spin(tinner, self.min_var, 0, 59, self._on_time_change).pack(
+            side="left", padx=(0, 8), pady=4)
 
-        # Buttons
-        btns = tk.Frame(row1, bg=BG2)
+        # 按钮组
+        btns = tk.Frame(row, bg=BG2)
         btns.pack(side="right")
+        _btn(btns, "▶  立即采集", self._run_now, bg=GREEN, fg="#1e1e2e").pack(
+            side="left", padx=(0, 8))
+        self.sched_btn = _btn(btns, "⏰  开始定时", self._toggle_schedule)
+        self.sched_btn.pack(side="left", padx=(0, 8))
+        _btn(btns, "📊  查看数据库", self._open_db_viewer, bg=BG3).pack(
+            side="left", padx=(0, 8))
+        _btn(btns, "📂  打开数据文件夹", self._open_data_folder, bg=BG3).pack(
+            side="left")
 
-        _btn(btns, "▶  Run Now", self._run_now, bg=GREEN,
-             fg="#1e1e2e").pack(side="left", padx=(0, 8))
-        self.schedule_btn = _btn(btns, "⏰  Start Schedule",
-                                 self._toggle_schedule, bg=BG3)
-        self.schedule_btn.pack(side="left")
-
-        _btn(btns, "📂  Open Data Folder",
-             self._open_data_folder, bg=BG3).pack(side="left", padx=(8, 0))
-
-        # ── Log area ──────────────────────────────────────────────────────────
+        # 日志区
         log_card = tk.Frame(parent, bg=BG2,
                             highlightthickness=1, highlightbackground=BORDER)
         log_card.pack(fill="both", expand=True)
 
-        log_header = tk.Frame(log_card, bg=BG2)
-        log_header.pack(fill="x", padx=10, pady=(10, 0))
-        _label(log_header, "  Run Log", size=10, bold=True, bg=BG2).pack(side="left")
-        _btn(log_header, "Clear", self._clear_log, bg=BG3).pack(side="right")
+        lh = tk.Frame(log_card, bg=BG2)
+        lh.pack(fill="x", padx=10, pady=(10, 0))
+        _label(lh, "  运行日志", size=10, bold=True, bg=BG2).pack(side="left")
+        _btn(lh, "清空", self._clear_log, bg=BG3).pack(side="right")
 
         self.log_text = scrolledtext.ScrolledText(
-            log_card,
-            font=("Consolas", 9),
-            bg=BG3, fg=FG,
-            relief="flat", bd=0,
-            state="disabled",
-            wrap="word",
-            padx=10, pady=8,
-        )
+            log_card, font=("Consolas", 9),
+            bg=BG3, fg=FG, relief="flat", bd=0,
+            state="disabled", wrap="word", padx=10, pady=8)
         self.log_text.pack(fill="both", expand=True, padx=10, pady=8)
         self.log_text.tag_config("error",   foreground=RED)
         self.log_text.tag_config("warn",    foreground=YELLOW)
         self.log_text.tag_config("success", foreground=GREEN)
         self.log_text.tag_config("info",    foreground=FG)
 
-    # ── Seller management ─────────────────────────────────────────────────────
+    # ── 店铺管理 ──────────────────────────────────────────────────────────────
 
     def _refresh_seller_list(self):
-        self.seller_listbox.delete(0, "end")
+        self.seller_lb.delete(0, "end")
         for s in self.settings["sellers"]:
-            label = f"  {s['name']}  ({s['id']})"
-            self.seller_listbox.insert("end", label)
+            self.seller_lb.insert("end", f"  {s['name']}  ({s['id']})")
 
     def _add_seller(self):
         dlg = AddSellerDialog(self)
         self.wait_window(dlg)
         if dlg.result:
-            # Check duplicate
-            existing_ids = [s["id"] for s in self.settings["sellers"]]
-            if dlg.result["id"] in existing_ids:
-                messagebox.showwarning("Duplicate",
-                    f"Seller ID {dlg.result['id']} is already in the list.")
+            if any(s["id"] == dlg.result["id"] for s in self.settings["sellers"]):
+                messagebox.showwarning("重复", f"卖家 ID {dlg.result['id']} 已存在。")
                 return
             self.settings["sellers"].append(dlg.result)
             save_settings(self.settings)
             self._refresh_seller_list()
-            logging.info("Added seller: %s (%s)",
-                         dlg.result["name"], dlg.result["id"])
+            logging.info("已添加店铺：%s (%s)", dlg.result["name"], dlg.result["id"])
 
     def _remove_seller(self):
-        sel = self.seller_listbox.curselection()
+        sel = self.seller_lb.curselection()
         if not sel:
-            messagebox.showinfo("Select a store",
-                                "Please select a store to remove.")
+            messagebox.showinfo("提示", "请先选中一个店铺。")
             return
         idx = sel[0]
-        seller = self.settings["sellers"][idx]
-        if messagebox.askyesno("Confirm",
-                f"Remove store '{seller['name']}' ({seller['id']})?"):
+        s = self.settings["sellers"][idx]
+        if messagebox.askyesno("确认删除", f"确定要删除店铺「{s['name']}」？"):
             self.settings["sellers"].pop(idx)
             save_settings(self.settings)
             self._refresh_seller_list()
-            logging.info("Removed seller: %s", seller["id"])
+            logging.info("已删除店铺：%s", s["id"])
 
-    # ── Run scraper ───────────────────────────────────────────────────────────
+    # ── 采集 ──────────────────────────────────────────────────────────────────
 
     def _run_now(self):
         if self._scraper_thread and self._scraper_thread.is_alive():
-            messagebox.showinfo("Running",
-                "Scraper is already running. Please wait.")
+            messagebox.showinfo("正在运行", "采集正在进行中，请稍候。")
             return
-        seller_ids = [s["id"] for s in self.settings["sellers"]]
-        if not seller_ids:
-            messagebox.showwarning("No Sellers",
-                "Please add at least one seller store first.")
+        ids = [s["id"] for s in self.settings["sellers"]]
+        if not ids:
+            messagebox.showwarning("无店铺", "请先添加至少一个店铺。")
             return
         self._scraper_thread = threading.Thread(
-            target=self._scraper_worker, args=(seller_ids,), daemon=True)
+            target=self._scraper_worker, args=(ids,), daemon=True)
         self._scraper_thread.start()
 
     def _scraper_worker(self, seller_ids: list[str]):
-        self._set_status("Running...", GREEN)
+        self._set_status("采集中...", GREEN)
         try:
-            # Import here so GUI loads fast even if deps missing
             from amazon_scraper.main import run_once
             run_once(seller_ids)
         except ImportError as e:
-            logging.error("Import error: %s — make sure dependencies are installed.", e)
+            logging.error("依赖缺失：%s", e)
         except Exception as e:
-            logging.exception("Scraper error: %s", e)
+            logging.exception("采集出错：%s", e)
         finally:
-            self._set_status("Idle", FG2)
+            self._set_status("待机", FG2)
+            self.after(0, self._refresh_stats)
 
     def _set_status(self, text: str, color: str):
         self.after(0, lambda: self.status_dot.config(
-            text=f"●  {text}", fg=color))
+            text=f"● {text}", fg=color))
 
-    # ── Schedule ──────────────────────────────────────────────────────────────
+    # ── 定时任务 ──────────────────────────────────────────────────────────────
 
     def _on_time_change(self):
         h = self.hour_var.get().zfill(2)
@@ -447,26 +545,21 @@ class App(tk.Tk):
             self._start_schedule()
 
     def _start_schedule(self, silent=False):
-        seller_ids = [s["id"] for s in self.settings["sellers"]]
-        if not seller_ids and not silent:
-            messagebox.showwarning("No Sellers",
-                "Please add at least one seller store first.")
+        ids = [s["id"] for s in self.settings["sellers"]]
+        if not ids and not silent:
+            messagebox.showwarning("无店铺", "请先添加至少一个店铺。")
             return
-
         t = self.settings["schedule_time"]
         schedule_lib.clear()
         schedule_lib.every().day.at(t).do(
-            lambda: self._scraper_worker(seller_ids))
-
+            lambda: self._scraper_worker(ids))
         self._scheduler_running = True
         self.settings["schedule_enabled"] = True
         save_settings(self.settings)
-
-        self.schedule_btn.config(text="⏹  Stop Schedule", bg=RED)
-        self._set_status(f"Scheduled at {t}", YELLOW)
-        logging.info("Schedule started — will run daily at %s", t)
-
-        if self._scheduler_thread is None or not self._scheduler_thread.is_alive():
+        self.sched_btn.config(text="⏹  停止定时", bg=RED)
+        self._set_status(f"已定时 {t}", YELLOW)
+        logging.info("定时任务已启动，将于每天 %s 自动采集", t)
+        if not (self._scheduler_thread and self._scheduler_thread.is_alive()):
             self._scheduler_thread = threading.Thread(
                 target=self._scheduler_loop, daemon=True)
             self._scheduler_thread.start()
@@ -476,16 +569,34 @@ class App(tk.Tk):
         self.settings["schedule_enabled"] = False
         save_settings(self.settings)
         schedule_lib.clear()
-        self.schedule_btn.config(text="⏰  Start Schedule", bg=BG3)
-        self._set_status("Idle", FG2)
-        logging.info("Schedule stopped.")
+        self.sched_btn.config(text="⏰  开始定时", bg=BG3)
+        self._set_status("待机", FG2)
+        logging.info("定时任务已停止。")
 
     def _scheduler_loop(self):
         while self._scheduler_running:
             schedule_lib.run_pending()
             time.sleep(20)
 
-    # ── Misc ──────────────────────────────────────────────────────────────────
+    # ── 统计刷新 ──────────────────────────────────────────────────────────────
+
+    def _refresh_stats(self):
+        try:
+            from amazon_scraper.db import get_stats, DB_PATH
+            if not DB_PATH.exists():
+                return
+            s = get_stats()
+            self.stat_vars["total"].set(str(s["total_products"]))
+            self.stat_vars["new"].set(str(s["new_today"]))
+            self.stat_vars["sellers"].set(str(s["sellers"]))
+            self.stat_vars["last"].set(str(s["last_run"]))
+        except Exception:
+            pass
+
+    # ── 工具按钮 ──────────────────────────────────────────────────────────────
+
+    def _open_db_viewer(self):
+        DBViewerDialog(self)
 
     def _open_data_folder(self):
         DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -503,13 +614,21 @@ class App(tk.Tk):
 
     def _on_close(self):
         if self._scraper_thread and self._scraper_thread.is_alive():
-            if not messagebox.askyesno("Scraper Running",
-                    "Scraper is still running. Quit anyway?"):
+            if not messagebox.askyesno("采集中", "采集正在进行，确定要退出吗？"):
                 return
         self.destroy()
 
 
-# ── Entry point ───────────────────────────────────────────────────────────────
+# ── 辅助控件 ──────────────────────────────────────────────────────────────────
+
+def _spin(parent, var, frm, to, cmd):
+    return tk.Spinbox(parent, from_=frm, to=to, width=3,
+                      textvariable=var, format="%02.0f",
+                      font=("Consolas", 13, "bold"),
+                      bg=BG3, fg=FG, buttonbackground=BG3,
+                      relief="flat", bd=0, insertbackground=FG,
+                      command=cmd)
+
 
 def main():
     app = App()
