@@ -1,10 +1,18 @@
 """
-Amazon scraper: seller storefront listing + product detail pages.
+Amazon scraper — fast mode.
+
+Extracts all basic product data directly from the seller storefront
+listing pages. No individual product detail pages are visited, which
+cuts request count from O(products) down to O(pages).
+
+Multiple pages are fetched concurrently up to CONCURRENT_PAGES workers.
 """
 import re
 import time
 import random
 import logging
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional
 
 import requests
@@ -26,6 +34,9 @@ USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0",
 ]
 
+# Shared lock so concurrent threads don't stomp each other's log lines
+_log_lock = threading.Lock()
+
 
 def _build_session() -> requests.Session:
     s = requests.Session()
@@ -41,33 +52,27 @@ def _build_session() -> requests.Session:
 
 
 def _get(session: requests.Session, url: str) -> Optional[BeautifulSoup]:
-    """GET a URL with retries; return parsed BS4 or None on failure."""
     for attempt in range(1, config.MAX_RETRIES + 1):
         try:
             session.headers["User-Agent"] = random.choice(USER_AGENTS)
             resp = session.get(url, timeout=config.REQUEST_TIMEOUT)
             if resp.status_code == 503:
-                logger.warning("503 on %s (attempt %d/%d) — backing off",
-                               url, attempt, config.MAX_RETRIES)
-                time.sleep(30 * attempt)
+                wait = 20 * attempt
+                logger.warning("503 — backing off %ds (attempt %d/%d)",
+                               wait, attempt, config.MAX_RETRIES)
+                time.sleep(wait)
                 continue
             if resp.status_code != 200:
                 logger.warning("HTTP %s for %s", resp.status_code, url)
                 return None
             return BeautifulSoup(resp.text, "lxml")
         except requests.RequestException as exc:
-            logger.warning("Request error %s (attempt %d/%d): %s",
-                           url, attempt, config.MAX_RETRIES, exc)
-            time.sleep(5 * attempt)
+            logger.warning("Request error (attempt %d/%d): %s", attempt, config.MAX_RETRIES, exc)
+            time.sleep(3 * attempt)
     return None
 
 
-def _sleep():
-    delay = random.uniform(config.REQUEST_DELAY_MIN, config.REQUEST_DELAY_MAX)
-    time.sleep(delay)
-
-
-# ── Storefront listing ────────────────────────────────────────────────────────
+# ── Listing page parsing ──────────────────────────────────────────────────────
 
 def _storefront_url(seller_id: str, page: int = 1) -> str:
     return (
@@ -76,195 +81,185 @@ def _storefront_url(seller_id: str, page: int = 1) -> str:
     )
 
 
-def _parse_listing_page(soup: BeautifulSoup) -> list[str]:
-    """Return list of ASINs found on a search/listing results page."""
-    asins: list[str] = []
-    for div in soup.select("[data-asin]"):
-        asin = div.get("data-asin", "").strip()
-        if asin and len(asin) == 10:
-            asins.append(asin)
-    return list(dict.fromkeys(asins))  # deduplicate, preserve order
-
-
-def _has_next_page(soup: BeautifulSoup) -> bool:
-    return bool(soup.select_one("a.s-pagination-next:not(.s-pagination-disabled)"))
-
-
-def get_seller_asins(seller_id: str) -> list[str]:
-    """Scrape all ASINs from a seller's storefront (paginated)."""
-    session = _build_session()
-    all_asins: list[str] = []
-    max_pages = config.MAX_PAGES_PER_SELLER or 9999
-
-    for page in range(1, max_pages + 1):
-        url = _storefront_url(seller_id, page)
-        logger.info("Fetching seller %s page %d: %s", seller_id, page, url)
-        soup = _get(session, url)
-        if soup is None:
-            logger.error("Failed to fetch page %d for seller %s", page, seller_id)
-            break
-
-        asins = _parse_listing_page(soup)
-        if not asins:
-            logger.info("No ASINs on page %d — stopping pagination", page)
-            break
-
-        all_asins.extend(asins)
-        logger.info("  Found %d ASINs (total so far: %d)", len(asins), len(all_asins))
-
-        if not _has_next_page(soup):
-            break
-        _sleep()
-
-    return list(dict.fromkeys(all_asins))
-
-
-# ── Product detail page ───────────────────────────────────────────────────────
-
-def _product_url(asin: str) -> str:
-    return f"https://www.{config.AMAZON_DOMAIN}/dp/{asin}"
-
-
 def _clean(text: Optional[str]) -> str:
     if not text:
         return ""
     return re.sub(r"\s+", " ", text).strip()
 
 
-def _parse_product(soup: BeautifulSoup, asin: str) -> dict:
-    product: dict = {"asin": asin}
+def _parse_cards(soup: BeautifulSoup, seller_id: str) -> list[dict]:
+    """
+    Extract one product dict per card directly from a listing results page.
+    Covers all basic fields without visiting individual product pages.
+    """
+    products: list[dict] = []
 
-    # Title
-    title_tag = soup.select_one("#productTitle")
-    product["title"] = _clean(title_tag.get_text()) if title_tag else ""
+    for card in soup.select("div[data-asin][data-component-type='s-search-result']"):
+        asin = card.get("data-asin", "").strip()
+        if not asin or len(asin) != 10:
+            continue
 
-    # Brand
-    brand_tag = (
-        soup.select_one("#bylineInfo")
-        or soup.select_one(".po-brand .po-break-word")
-    )
-    product["brand"] = _clean(brand_tag.get_text()) if brand_tag else ""
-    product["brand"] = re.sub(r"^(Brand|Visit the|Store):?\s*", "",
-                               product["brand"], flags=re.IGNORECASE)
+        # Title
+        title_tag = card.select_one("h2 span, h2 a span")
+        title = _clean(title_tag.get_text()) if title_tag else ""
 
-    # Price
-    price_tag = (
-        soup.select_one(".a-price .a-offscreen")
-        or soup.select_one("#priceblock_ourprice")
-        or soup.select_one("#priceblock_dealprice")
-    )
-    product["price"] = _clean(price_tag.get_text()) if price_tag else ""
+        # Brand — shown as "by BrandName" or in a separate span
+        brand = ""
+        brand_tag = card.select_one(".a-row .a-size-base.a-color-secondary")
+        if brand_tag:
+            raw = _clean(brand_tag.get_text())
+            brand = re.sub(r"^by\s+", "", raw, flags=re.IGNORECASE)
 
-    # List price / discount
-    list_price_tag = soup.select_one(".basisPrice .a-offscreen")
-    product["list_price"] = _clean(list_price_tag.get_text()) if list_price_tag else ""
+        # Price
+        price = ""
+        price_tag = card.select_one(".a-price .a-offscreen")
+        if price_tag:
+            price = _clean(price_tag.get_text())
 
-    # Rating
-    rating_tag = soup.select_one("#acrPopover .a-size-base.a-color-base")
-    if not rating_tag:
-        rating_tag = soup.select_one("span[data-hook='rating-out-of-text']")
-    product["rating"] = _clean(rating_tag.get_text()) if rating_tag else ""
-
-    # Review count
-    review_count_tag = soup.select_one("#acrCustomerReviewText")
-    if not review_count_tag:
-        review_count_tag = soup.select_one("span[data-hook='total-review-count']")
-    product["review_count"] = re.sub(r"[^\d,]", "",
-        review_count_tag.get_text()) if review_count_tag else ""
-
-    # BSR (Best Sellers Rank)
-    bsr_section = soup.find("li", {"id": re.compile(r"SalesRank")}) \
-                  or soup.find("tr", {"class": re.compile(r".*rank.*", re.I)})
-    if not bsr_section:
-        bsr_section = soup.find(string=re.compile(r"Best Sellers Rank", re.I))
-        bsr_section = bsr_section.parent if bsr_section else None
-    product["bsr"] = _clean(bsr_section.get_text()) if bsr_section else ""
-    product["bsr"] = re.sub(r"\s+", " ", product["bsr"])[:300]
-
-    # Date First Available
-    date_tag = None
-    for row in soup.select(".prodDetSectionEntry, .a-expander-content tr"):
-        label = row.select_one("td:first-child, th")
-        value = row.select_one("td:last-child")
-        if label and value and "Date First Available" in label.get_text():
-            date_tag = value
-            break
-    if not date_tag:
-        # Try detail bullets
-        for li in soup.select("#detailBullets_feature_div li"):
-            text = li.get_text()
-            if "Date First Available" in text:
-                parts = text.split(":")
-                product["date_first_available"] = _clean(parts[-1]) if len(parts) > 1 else ""
+        # Original / list price
+        list_price = ""
+        list_tags = card.select(".a-price.a-text-price .a-offscreen")
+        for lt in list_tags:
+            candidate = _clean(lt.get_text())
+            if candidate and candidate != price:
+                list_price = candidate
                 break
-    product.setdefault("date_first_available",
-                        _clean(date_tag.get_text()) if date_tag else "")
 
-    # Category (breadcrumb)
-    breadcrumb = soup.select("#wayfinding-breadcrumbs_feature_div a")
-    product["category"] = " > ".join(_clean(a.get_text()) for a in breadcrumb)
+        # Rating (e.g. "4.5 out of 5 stars")
+        rating = ""
+        rating_tag = card.select_one("span[aria-label*='out of']")
+        if rating_tag:
+            m = re.search(r"([\d.]+)\s+out of", rating_tag.get("aria-label", ""))
+            rating = m.group(1) if m else ""
+        if not rating:
+            rating_tag2 = card.select_one(".a-icon-alt")
+            if rating_tag2:
+                m = re.search(r"([\d.]+)", _clean(rating_tag2.get_text()))
+                rating = m.group(1) if m else ""
 
-    # Main image URL
-    img_tag = soup.select_one("#imgTagWrapperId img, #landingImage")
-    product["main_image_url"] = img_tag.get("src", "") if img_tag else ""
+        # Review count
+        review_count = ""
+        rc_tag = card.select_one("span[aria-label].a-size-base")
+        if rc_tag:
+            label = rc_tag.get("aria-label", "")
+            m = re.search(r"([\d,]+)", label)
+            review_count = m.group(1) if m else ""
+        if not review_count:
+            rc_tag2 = card.select_one(".a-size-base.s-underline-text")
+            if rc_tag2:
+                review_count = re.sub(r"[^\d,]", "", _clean(rc_tag2.get_text()))
 
-    # Bullet points (key features)
-    bullets = soup.select("#feature-bullets li span.a-list-item")
-    product["bullet_points"] = " | ".join(
-        _clean(b.get_text()) for b in bullets if _clean(b.get_text())
-    )
+        # Prime
+        prime = "Yes" if card.select_one(".a-icon-prime") else "No"
 
-    # Product description
-    desc_tag = soup.select_one("#productDescription p, #productDescription")
-    product["description"] = _clean(desc_tag.get_text())[:1000] if desc_tag else ""
+        # Main image
+        img_tag = card.select_one("img.s-image")
+        image_url = img_tag.get("src", "") if img_tag else ""
 
-    # Prime eligibility
-    product["prime"] = "Yes" if soup.select_one(".a-icon-prime") else "No"
+        # Product URL
+        link_tag = card.select_one("h2 a[href]")
+        href = link_tag.get("href", "") if link_tag else f"/dp/{asin}"
+        if href.startswith("/"):
+            href = f"https://www.{config.AMAZON_DOMAIN}{href}"
+        url = re.sub(r"\?.*", "", href) or f"https://www.{config.AMAZON_DOMAIN}/dp/{asin}"
 
-    # Availability
-    avail_tag = soup.select_one("#availability span")
-    product["availability"] = _clean(avail_tag.get_text()) if avail_tag else ""
+        # Sponsored flag
+        sponsored = "Yes" if card.select_one(".s-label-popover-default, [class*='AdHolder']") else "No"
 
-    # Product URL
-    product["url"] = _product_url(asin)
+        products.append({
+            "seller_id":    seller_id,
+            "asin":         asin,
+            "title":        title,
+            "brand":        brand,
+            "price":        price,
+            "list_price":   list_price,
+            "rating":       rating,
+            "review_count": review_count,
+            "prime":        prime,
+            "sponsored":    sponsored,
+            "main_image_url": image_url,
+            "url":          url,
+        })
 
-    return product
+    return products
 
 
-def get_product_details(asin: str, session: Optional[requests.Session] = None) -> Optional[dict]:
-    """Fetch and parse a single product detail page."""
-    if session is None:
-        session = _build_session()
-    url = _product_url(asin)
-    logger.info("  Fetching product %s", asin)
+def _has_next_page(soup: BeautifulSoup) -> bool:
+    return bool(soup.select_one("a.s-pagination-next:not(.s-pagination-disabled)"))
+
+
+def _total_pages(soup: BeautifulSoup, max_pages: int) -> int:
+    """Best-effort total page count from pagination widget."""
+    nums = [
+        int(t.get_text())
+        for t in soup.select("span.s-pagination-item")
+        if t.get_text().isdigit()
+    ]
+    found = max(nums) if nums else 1
+    return min(found, max_pages) if max_pages else found
+
+
+# ── Concurrent multi-page fetch ───────────────────────────────────────────────
+
+def _fetch_page(seller_id: str, page: int) -> tuple[int, list[dict], bool]:
+    """Fetch one listing page; return (page_num, products, has_next)."""
+    session = _build_session()
+    # Stagger concurrent requests slightly to reduce burst fingerprint
+    time.sleep(random.uniform(0.5, 1.5) * (page % config.CONCURRENT_PAGES))
+    url = _storefront_url(seller_id, page)
     soup = _get(session, url)
     if soup is None:
-        logger.error("  Failed to fetch product %s", asin)
-        return None
-    return _parse_product(soup, asin)
+        return page, [], False
+    products = _parse_cards(soup, seller_id)
+    has_next = _has_next_page(soup)
+    with _log_lock:
+        logger.info("  Page %d: %d products extracted", page, len(products))
+    return page, products, has_next
 
 
 def scrape_seller(seller_id: str) -> list[dict]:
     """
-    Full pipeline for one seller:
-    1. Collect all ASINs from the storefront.
-    2. Fetch detail page for each ASIN.
-    Returns list of product dicts with a 'seller_id' field added.
+    Scrape all pages of a seller's storefront concurrently.
+    Returns deduplicated list of product dicts.
     """
     logger.info("=== Scraping seller %s ===", seller_id)
-    asins = get_seller_asins(seller_id)
-    logger.info("Total ASINs found for %s: %d", seller_id, len(asins))
+    max_pages = config.MAX_PAGES_PER_SELLER or 999
+    workers   = min(config.CONCURRENT_PAGES, max_pages)
 
-    session = _build_session()
-    products: list[dict] = []
+    # ── Phase 1: fetch page 1 to learn total pages ────────────────────────────
+    session_p1 = _build_session()
+    soup1 = _get(session_p1, _storefront_url(seller_id, 1))
+    if soup1 is None:
+        logger.error("Could not reach storefront for seller %s", seller_id)
+        return []
 
-    for i, asin in enumerate(asins, 1):
-        logger.info("[%d/%d] Getting details for ASIN %s", i, len(asins), asin)
-        product = get_product_details(asin, session)
-        if product:
-            product["seller_id"] = seller_id
-            products.append(product)
-        _sleep()
+    page1_products = _parse_cards(soup1, seller_id)
+    logger.info("  Page 1: %d products extracted", len(page1_products))
 
-    logger.info("Seller %s: collected %d products", seller_id, len(products))
-    return products
+    if not _has_next_page(soup1):
+        logger.info("Single page seller — done.")
+        return page1_products
+
+    total = _total_pages(soup1, max_pages)
+    logger.info("Fetching pages 2–%d concurrently (%d workers)", total, workers)
+
+    # ── Phase 2: fetch remaining pages in parallel ────────────────────────────
+    all_products: list[dict] = list(page1_products)
+    seen_asins: set[str] = {p["asin"] for p in page1_products}
+
+    remaining_pages = list(range(2, total + 1))
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {
+            pool.submit(_fetch_page, seller_id, pg): pg
+            for pg in remaining_pages
+        }
+        for future in as_completed(futures):
+            _, products, _ = future.result()
+            for p in products:
+                if p["asin"] not in seen_asins:
+                    seen_asins.add(p["asin"])
+                    all_products.append(p)
+
+    logger.info("Seller %s: %d unique products total", seller_id, len(all_products))
+    return all_products

@@ -21,11 +21,12 @@ DATA_DIR = "data"           # daily snapshots and output CSVs go here
 LOG_DIR  = "logs"
 
 # ── Scraping behaviour ────────────────────────────────────────────────────────
-REQUEST_DELAY_MIN = 3   # seconds between requests (min)
-REQUEST_DELAY_MAX = 7   # seconds between requests (max)
-MAX_PAGES_PER_SELLER = 10  # safety limit; set 0 for unlimited
-REQUEST_TIMEOUT = 30
-MAX_RETRIES = 3
+# Detail pages are no longer visited — only listing pages are fetched.
+# Concurrent pages: how many listing pages to fetch simultaneously.
+CONCURRENT_PAGES   = 4    # increase for more speed (risk: higher block chance)
+MAX_PAGES_PER_SELLER = 20  # safety cap; set 0 for unlimited
+REQUEST_TIMEOUT    = 20
+MAX_RETRIES        = 3
 
 # Optional HTTP proxy (e.g. "http://user:pass@host:port"). Leave "" to disable.
 PROXY = ""

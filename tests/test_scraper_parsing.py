@@ -1,4 +1,4 @@
-"""Tests for HTML parsing logic (no network required)."""
+"""Tests for listing-page parsing (no network required)."""
 import sys
 from pathlib import Path
 
@@ -7,171 +7,178 @@ from bs4 import BeautifulSoup
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from amazon_scraper.scraper import _parse_listing_page, _parse_product, _has_next_page
+from amazon_scraper.scraper import _parse_cards, _has_next_page
 
 
-# ── _parse_listing_page ───────────────────────────────────────────────────────
+# ── Shared test HTML ──────────────────────────────────────────────────────────
 
-LISTING_HTML = """
+def _make_card(asin="B000000001", title="Test Product", brand="SuperBrand",
+               price="$29.99", list_price="$39.99", rating="4.3",
+               reviews="1,234", prime=True, sponsored=False):
+    prime_html = '<i class="a-icon a-icon-prime"></i>' if prime else ""
+    sponsored_html = '<span class="s-label-popover-default">Sponsored</span>' if sponsored else ""
+    return f"""
+    <div data-asin="{asin}"
+         data-component-type="s-search-result"
+         class="s-result-item">
+      {sponsored_html}
+      <h2>
+        <a href="/dp/{asin}?ref=test">
+          <span>{title}</span>
+        </a>
+      </h2>
+      <div class="a-row">
+        <span class="a-size-base a-color-secondary">by {brand}</span>
+      </div>
+      <span aria-label="{rating} out of 5 stars" class="a-icon-star-small">
+        <span class="a-icon-alt">{rating} out of 5 stars</span>
+      </span>
+      <span aria-label="{reviews}" class="a-size-base s-underline-text">{reviews}</span>
+      <div class="a-price">
+        <span class="a-offscreen">{price}</span>
+      </div>
+      <div class="a-price a-text-price">
+        <span class="a-offscreen">{list_price}</span>
+      </div>
+      {prime_html}
+      <img class="s-image" src="https://images.example.com/{asin}.jpg" />
+    </div>
+    """
+
+
+LISTING_HTML = f"""
 <html><body>
-  <div data-asin="B000000001" class="s-result-item"></div>
-  <div data-asin="B000000002" class="s-result-item"></div>
-  <div data-asin="" class="s-result-item"></div>
-  <div data-asin="BADASIN" class="s-result-item"></div>
+  {_make_card("B000000001", "Product Alpha", "BrandA", "$19.99", "$24.99", "4.5", "500")}
+  {_make_card("B000000002", "Product Beta",  "BrandB", "$9.99",  "",       "3.8", "42", prime=False)}
+  <div data-asin="" data-component-type="s-search-result"></div>
+  <div data-asin="SHORT" data-component-type="s-search-result"></div>
 </body></html>
 """
 
 
-def test_parse_listing_page_extracts_valid_asins():
+# ── _parse_cards ──────────────────────────────────────────────────────────────
+
+def test_parse_cards_count():
     soup = BeautifulSoup(LISTING_HTML, "lxml")
-    asins = _parse_listing_page(soup)
+    products = _parse_cards(soup, "SELLER1")
+    assert len(products) == 2
+
+
+def test_parse_cards_asin():
+    soup = BeautifulSoup(LISTING_HTML, "lxml")
+    products = _parse_cards(soup, "SELLER1")
+    asins = [p["asin"] for p in products]
     assert "B000000001" in asins
     assert "B000000002" in asins
-    # Empty string and 7-char ASIN should be excluded
-    assert "" not in asins
-    assert "BADASIN" not in asins
 
 
-def test_parse_listing_page_deduplicates():
+def test_parse_cards_title():
+    soup = BeautifulSoup(LISTING_HTML, "lxml")
+    products = _parse_cards(soup, "SELLER1")
+    assert products[0]["title"] == "Product Alpha"
+
+
+def test_parse_cards_brand():
+    soup = BeautifulSoup(LISTING_HTML, "lxml")
+    products = _parse_cards(soup, "SELLER1")
+    assert products[0]["brand"] == "BrandA"
+
+
+def test_parse_cards_price():
+    soup = BeautifulSoup(LISTING_HTML, "lxml")
+    products = _parse_cards(soup, "SELLER1")
+    assert products[0]["price"] == "$19.99"
+
+
+def test_parse_cards_list_price():
+    soup = BeautifulSoup(LISTING_HTML, "lxml")
+    products = _parse_cards(soup, "SELLER1")
+    assert products[0]["list_price"] == "$24.99"
+
+
+def test_parse_cards_rating():
+    soup = BeautifulSoup(LISTING_HTML, "lxml")
+    products = _parse_cards(soup, "SELLER1")
+    assert products[0]["rating"] == "4.5"
+
+
+def test_parse_cards_review_count():
+    soup = BeautifulSoup(LISTING_HTML, "lxml")
+    products = _parse_cards(soup, "SELLER1")
+    assert "500" in products[0]["review_count"]
+
+
+def test_parse_cards_prime_yes():
+    soup = BeautifulSoup(LISTING_HTML, "lxml")
+    products = _parse_cards(soup, "SELLER1")
+    assert products[0]["prime"] == "Yes"
+
+
+def test_parse_cards_prime_no():
+    soup = BeautifulSoup(LISTING_HTML, "lxml")
+    products = _parse_cards(soup, "SELLER1")
+    assert products[1]["prime"] == "No"
+
+
+def test_parse_cards_image_url():
+    soup = BeautifulSoup(LISTING_HTML, "lxml")
+    products = _parse_cards(soup, "SELLER1")
+    assert "B000000001.jpg" in products[0]["main_image_url"]
+
+
+def test_parse_cards_url_contains_asin():
+    soup = BeautifulSoup(LISTING_HTML, "lxml")
+    products = _parse_cards(soup, "SELLER1")
+    assert "B000000001" in products[0]["url"]
+
+
+def test_parse_cards_seller_id():
+    soup = BeautifulSoup(LISTING_HTML, "lxml")
+    products = _parse_cards(soup, "SELLER_X")
+    assert all(p["seller_id"] == "SELLER_X" for p in products)
+
+
+def test_parse_cards_sponsored_yes():
+    html = f"<html><body>{_make_card('B000000003', sponsored=True)}</body></html>"
+    soup = BeautifulSoup(html, "lxml")
+    products = _parse_cards(soup, "S1")
+    assert products[0]["sponsored"] == "Yes"
+
+
+def test_parse_cards_sponsored_no():
+    html = f"<html><body>{_make_card('B000000004', sponsored=False)}</body></html>"
+    soup = BeautifulSoup(html, "lxml")
+    products = _parse_cards(soup, "S1")
+    assert products[0]["sponsored"] == "No"
+
+
+def test_parse_cards_empty_page():
+    soup = BeautifulSoup("<html><body></body></html>", "lxml")
+    assert _parse_cards(soup, "S1") == []
+
+
+def test_parse_cards_skips_invalid_asins():
     html = """
     <html><body>
-      <div data-asin="B000000001"></div>
-      <div data-asin="B000000001"></div>
+      <div data-asin="" data-component-type="s-search-result"></div>
+      <div data-asin="TOOSHORT" data-component-type="s-search-result"></div>
     </body></html>
     """
     soup = BeautifulSoup(html, "lxml")
-    asins = _parse_listing_page(soup)
-    assert asins.count("B000000001") == 1
-
-
-def test_parse_listing_page_empty():
-    soup = BeautifulSoup("<html><body></body></html>", "lxml")
-    assert _parse_listing_page(soup) == []
+    assert _parse_cards(soup, "S1") == []
 
 
 # ── _has_next_page ────────────────────────────────────────────────────────────
 
 def test_has_next_page_true():
     html = '<html><body><a class="s-pagination-next">Next</a></body></html>'
-    soup = BeautifulSoup(html, "lxml")
-    assert _has_next_page(soup) is True
+    assert _has_next_page(BeautifulSoup(html, "lxml")) is True
 
 
 def test_has_next_page_disabled():
-    html = '<html><body><a class="s-pagination-next s-pagination-disabled">Next</a></body></html>'
-    soup = BeautifulSoup(html, "lxml")
-    assert _has_next_page(soup) is False
+    html = '<html><body><a class="s-pagination-next s-pagination-disabled"></a></body></html>'
+    assert _has_next_page(BeautifulSoup(html, "lxml")) is False
 
 
 def test_has_next_page_absent():
-    soup = BeautifulSoup("<html><body></body></html>", "lxml")
-    assert _has_next_page(soup) is False
-
-
-# ── _parse_product ────────────────────────────────────────────────────────────
-
-PRODUCT_HTML = """
-<html><body>
-  <span id="productTitle">  Test Product Title  </span>
-  <a id="bylineInfo">Brand: SuperBrand</a>
-  <div class="a-price"><span class="a-offscreen">$29.99</span></div>
-  <span id="acrPopover"><span class="a-size-base a-color-base">4.3</span></span>
-  <span id="acrCustomerReviewText">1,500 ratings</span>
-  <div id="availability"><span>In Stock</span></div>
-  <div id="wayfinding-breadcrumbs_feature_div">
-    <a>Electronics</a> <a>Cameras</a>
-  </div>
-  <img id="landingImage" src="https://images.example.com/product.jpg" />
-  <div id="feature-bullets">
-    <ul>
-      <li><span class="a-list-item">Great feature one</span></li>
-      <li><span class="a-list-item">Great feature two</span></li>
-    </ul>
-  </div>
-  <div id="productDescription"><p>This is the product description.</p></div>
-  <i class="a-icon a-icon-prime"></i>
-</body></html>
-"""
-
-
-def test_parse_product_title():
-    soup = BeautifulSoup(PRODUCT_HTML, "lxml")
-    p = _parse_product(soup, "B000000001")
-    assert p["title"] == "Test Product Title"
-
-
-def test_parse_product_brand():
-    soup = BeautifulSoup(PRODUCT_HTML, "lxml")
-    p = _parse_product(soup, "B000000001")
-    assert "SuperBrand" in p["brand"]
-
-
-def test_parse_product_price():
-    soup = BeautifulSoup(PRODUCT_HTML, "lxml")
-    p = _parse_product(soup, "B000000001")
-    assert p["price"] == "$29.99"
-
-
-def test_parse_product_rating():
-    soup = BeautifulSoup(PRODUCT_HTML, "lxml")
-    p = _parse_product(soup, "B000000001")
-    assert p["rating"] == "4.3"
-
-
-def test_parse_product_review_count():
-    soup = BeautifulSoup(PRODUCT_HTML, "lxml")
-    p = _parse_product(soup, "B000000001")
-    assert "1,500" in p["review_count"]
-
-
-def test_parse_product_category():
-    soup = BeautifulSoup(PRODUCT_HTML, "lxml")
-    p = _parse_product(soup, "B000000001")
-    assert p["category"] == "Electronics > Cameras"
-
-
-def test_parse_product_image_url():
-    soup = BeautifulSoup(PRODUCT_HTML, "lxml")
-    p = _parse_product(soup, "B000000001")
-    assert "product.jpg" in p["main_image_url"]
-
-
-def test_parse_product_bullet_points():
-    soup = BeautifulSoup(PRODUCT_HTML, "lxml")
-    p = _parse_product(soup, "B000000001")
-    assert "Great feature one" in p["bullet_points"]
-    assert "Great feature two" in p["bullet_points"]
-
-
-def test_parse_product_description():
-    soup = BeautifulSoup(PRODUCT_HTML, "lxml")
-    p = _parse_product(soup, "B000000001")
-    assert "product description" in p["description"]
-
-
-def test_parse_product_prime():
-    soup = BeautifulSoup(PRODUCT_HTML, "lxml")
-    p = _parse_product(soup, "B000000001")
-    assert p["prime"] == "Yes"
-
-
-def test_parse_product_no_prime():
-    html = PRODUCT_HTML.replace('<i class="a-icon a-icon-prime"></i>', "")
-    soup = BeautifulSoup(html, "lxml")
-    p = _parse_product(soup, "B000000001")
-    assert p["prime"] == "No"
-
-
-def test_parse_product_url():
-    soup = BeautifulSoup(PRODUCT_HTML, "lxml")
-    p = _parse_product(soup, "B000000001")
-    assert "B000000001" in p["url"]
-
-
-def test_parse_product_missing_fields():
-    """Empty page should return a dict with empty strings, not raise."""
-    soup = BeautifulSoup("<html><body></body></html>", "lxml")
-    p = _parse_product(soup, "B000000099")
-    assert p["asin"] == "B000000099"
-    assert p["title"] == ""
-    assert p["price"] == ""
+    assert _has_next_page(BeautifulSoup("<html></html>", "lxml")) is False

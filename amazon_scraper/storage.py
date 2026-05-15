@@ -14,10 +14,9 @@ logger = logging.getLogger(__name__)
 
 # Canonical column order for all CSV files
 COLUMNS = [
-    "seller_id", "asin", "title", "brand", "price", "list_price",
-    "rating", "review_count", "bsr", "prime", "availability",
-    "category", "date_first_available",
-    "main_image_url", "bullet_points", "description", "url",
+    "seller_id", "asin", "title", "brand",
+    "price", "list_price", "rating", "review_count",
+    "prime", "sponsored", "main_image_url", "url",
 ]
 
 
