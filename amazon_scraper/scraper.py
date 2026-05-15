@@ -413,7 +413,7 @@ def _extract_monthly_sales_detail(soup: BeautifulSoup) -> str:
 
 
 def batch_enrich_products(products: list[dict],
-                           max_workers: int = 4,
+                           max_workers: int = 2,
                            progress_cb=None) -> None:
     """
     Visit each product's detail page to fill in:
@@ -422,6 +422,7 @@ def batch_enrich_products(products: list[dict],
 
     Skips products that already have date_first_available set.
     Modifies list in-place.
+    Each worker reuses a persistent session to reduce connection overhead.
     """
     needed = [p for p in products if not p.get("date_first_available")]
     total  = len(needed)
@@ -429,20 +430,26 @@ def batch_enrich_products(products: list[dict],
         logger.info("所有产品已有上架日期，跳过详情页采集。")
         return
 
-    logger.info("开始采集详情页：%d 个产品需要获取上架日期和月销量...", total)
-    done_count = [0]   # mutable for closure
+    logger.info("开始采集详情页：%d 个产品（%d 个并发线程）...", total, max_workers)
+    done_count = [0]
+
+    # Each worker thread gets its own persistent session (thread-local)
+    _tls = threading.local()
+
+    def _session() -> requests.Session:
+        if not hasattr(_tls, "sess"):
+            _tls.sess = _build_session()
+        return _tls.sess
 
     def _fetch_one(product: dict) -> None:
         asin = product.get("asin", "")
         if not asin:
             return
-        session = _build_session()
-        soup = _get(session, _detail_url(asin))
+        soup = _get(_session(), _detail_url(asin))
         if soup:
             date_str = _extract_date_first_available(soup)
             if date_str:
                 product["date_first_available"] = date_str
-            # Upgrade monthly_sales if listing page didn't catch it
             if not product.get("monthly_sales"):
                 sales = _extract_monthly_sales_detail(soup)
                 if sales:
@@ -451,14 +458,14 @@ def batch_enrich_products(products: list[dict],
         with _log_lock:
             done_count[0] += 1
             n = done_count[0]
-            logger.info("  详情页 [%d/%d] ASIN:%s  上架日期:%s  月销量:%s",
+            logger.info("  详情页 [%d/%d] ASIN:%s  上架:%s  月销:%s",
                         n, total, asin,
                         product.get("date_first_available", "—"),
                         product.get("monthly_sales", "—"))
             if progress_cb:
                 progress_cb(n, total)
 
-        time.sleep(random.uniform(1.5, 2.5))
+        time.sleep(random.uniform(1.0, 2.0))
 
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         futures = [pool.submit(_fetch_one, p) for p in needed]

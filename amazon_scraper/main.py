@@ -10,7 +10,7 @@ from pathlib import Path
 from . import config
 from .scraper import scrape_seller, batch_enrich_products
 from .storage import save_snapshot, append_new_products
-from .db import init_db, upsert_products, log_run
+from .db import init_db, upsert_products, log_run, get_existing_product_data
 
 
 def _setup_logging() -> None:
@@ -95,9 +95,23 @@ def run_once(seller_ids: list[str] | None = None,
 
     # ── Detail page batch enrichment ─────────────────────────────────────────
     if fetch_dates and all_products_for_enrich:
-        logger.info("开始批量采集详情页（%d 个产品）...", len(all_products_for_enrich))
+        # Pre-populate from DB — only visit detail pages for truly new/unknown products
+        asins = [p["asin"] for p in all_products_for_enrich]
+        cached = get_existing_product_data(asins)
+        prefilled = 0
+        for p in all_products_for_enrich:
+            cached_data = cached.get(p["asin"])
+            if cached_data:
+                if not p.get("date_first_available"):
+                    p["date_first_available"] = cached_data["date_first_available"]
+                if not p.get("monthly_sales") and cached_data.get("monthly_sales"):
+                    p["monthly_sales"] = cached_data["monthly_sales"]
+                prefilled += 1
+        need_visit = sum(1 for p in all_products_for_enrich if not p.get("date_first_available"))
+        logger.info("DB缓存命中 %d 个产品，还需访问 %d 个详情页", prefilled, need_visit)
+        logger.info("开始批量采集详情页（%d 个产品）...", need_visit)
         batch_enrich_products(all_products_for_enrich,
-                              max_workers=config.CONCURRENT_PAGES,
+                              max_workers=getattr(config, "CONCURRENT_DETAIL_PAGES", 2),
                               progress_cb=progress_cb)
 
     # ── Apply listing date filter and upsert ──────────────────────────────────

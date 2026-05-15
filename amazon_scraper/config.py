@@ -25,10 +25,11 @@ LOG_DIR  = "logs"
 # ── Scraping behaviour ────────────────────────────────────────────────────────
 # Detail pages are no longer visited — only listing pages are fetched.
 # Concurrent pages: how many listing pages to fetch simultaneously.
-CONCURRENT_PAGES   = 4    # increase for more speed (risk: higher block chance)
-MAX_PAGES_PER_SELLER = 20  # safety cap; set 0 for unlimited
-REQUEST_TIMEOUT    = 20
-MAX_RETRIES        = 3
+CONCURRENT_PAGES        = 4   # listing pages fetched in parallel
+CONCURRENT_DETAIL_PAGES = 2   # detail page workers (keep low to avoid blocks)
+MAX_PAGES_PER_SELLER    = 20  # safety cap; set 0 for unlimited
+REQUEST_TIMEOUT         = 25
+MAX_RETRIES             = 3
 
 # Optional HTTP proxy (e.g. "http://user:pass@host:port"). Leave "" to disable.
 PROXY = ""

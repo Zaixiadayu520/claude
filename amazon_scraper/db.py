@@ -191,6 +191,28 @@ def get_known_asins(seller_id: str, days_back: int,
     return {r[0] for r in rows}
 
 
+# ── Enrichment cache (avoid re-visiting detail pages) ────────────────────────
+
+def get_existing_product_data(asins: list[str]) -> dict[str, dict]:
+    """Return {asin: {date_first_available, monthly_sales}} for known ASINs."""
+    if not asins:
+        return {}
+    placeholders = ",".join("?" * len(asins))
+    with _conn() as con:
+        rows = con.execute(
+            f"SELECT asin, date_first_available, monthly_sales "
+            f"FROM products WHERE asin IN ({placeholders}) "
+            f"AND date_first_available != '' "
+            f"ORDER BY scraped_date DESC",
+            asins,
+        ).fetchall()
+    result: dict[str, dict] = {}
+    for asin, dfa, ms in rows:
+        if asin not in result:
+            result[asin] = {"date_first_available": dfa, "monthly_sales": ms or ""}
+    return result
+
+
 # ── Stats queries (used by GUI) ───────────────────────────────────────────────
 
 def get_stats() -> dict:
