@@ -155,6 +155,81 @@ class AddSellerDialog(tk.Toplevel):
 
 
 
+# ── 批量添加店铺弹窗 ──────────────────────────────────────────────────────────
+
+class BatchAddSellersDialog(tk.Toplevel):
+    """Paste multiple seller URLs or IDs — one per line, comma/semicolon separated."""
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.result: list[dict] = []
+        self.title("批量添加店铺")
+        self.resizable(True, True)
+        self.configure(bg=BG2)
+        self.grab_set()
+        self.geometry(f"540x420+{parent.winfo_rootx()+80}+{parent.winfo_rooty()+80}")
+
+        tk.Label(self, text="批量添加店铺", font=("微软雅黑", 13, "bold"),
+                 bg=BG2, fg=FG).pack(pady=(16, 4))
+        tk.Label(self,
+                 text="每行一个 · 支持卖家ID 或 完整店铺URL（自动提取）· 可混用逗号/分号分隔",
+                 font=("微软雅黑", 8), bg=BG2, fg=FG2).pack()
+
+        self.text = tk.Text(self, font=("Consolas", 10),
+                            bg=BG3, fg=FG, insertbackground=FG,
+                            relief="flat", height=14, padx=8, pady=8,
+                            highlightthickness=1, highlightbackground=BORDER)
+        self.text.pack(fill="both", expand=True, padx=18, pady=(10, 4))
+
+        self.preview = tk.Label(self, text="", font=("微软雅黑", 8),
+                                bg=BG2, fg=CYAN, wraplength=500, justify="left")
+        self.preview.pack(padx=18, anchor="w", pady=(0, 4))
+        self.text.bind("<<Modified>>", self._on_text_change)
+
+        bf = tk.Frame(self, bg=BG2)
+        bf.pack(pady=10)
+        _btn(bf, "取消", self.destroy, bg=BG3).pack(side="left", padx=6)
+        _btn(bf, "确认添加", self._ok, bg=ACCENT).pack(side="left", padx=6)
+        self.bind("<Escape>", lambda e: self.destroy())
+
+    @staticmethod
+    def _extract_id(raw: str) -> str:
+        import re
+        m = re.search(r'[?&]me=([A-Z0-9]+)', raw, re.IGNORECASE)
+        return m.group(1).upper() if m else raw.strip().upper()
+
+    def _parse_ids(self) -> list[str]:
+        import re
+        text = self.text.get("1.0", "end")
+        tokens = re.split(r'[\n,;\s]+', text)
+        seen, ids = set(), []
+        for t in tokens:
+            t = t.strip()
+            if not t:
+                continue
+            sid = self._extract_id(t)
+            if sid and sid not in seen:
+                seen.add(sid)
+                ids.append(sid)
+        return ids
+
+    def _on_text_change(self, *_):
+        self.text.edit_modified(False)
+        ids = self._parse_ids()
+        if ids:
+            preview_ids = ", ".join(ids[:6]) + ("…" if len(ids) > 6 else "")
+            self.preview.config(text=f"识别到 {len(ids)} 个卖家ID：{preview_ids}")
+        else:
+            self.preview.config(text="")
+
+    def _ok(self):
+        ids = self._parse_ids()
+        if not ids:
+            return
+        self.result = [{"id": sid, "name": sid} for sid in ids]
+        self.destroy()
+
+
 # ── 数据库查看弹窗 ────────────────────────────────────────────────────────────
 
 class DBViewerDialog(tk.Toplevel):
@@ -739,7 +814,8 @@ class App(tk.Tk):
 
         bf = tk.Frame(parent, bg=BG2)
         bf.pack(fill="x", padx=10, pady=10)
-        _btn(bf, "+ 添加店铺", self._add_seller, bg=ACCENT).pack(fill="x", pady=(0, 5))
+        _btn(bf, "+ 添加店铺", self._add_seller, bg=ACCENT).pack(fill="x", pady=(0, 4))
+        _btn(bf, "≡ 批量添加", self._batch_add_seller, bg=BG3).pack(fill="x", pady=(0, 4))
         _btn(bf, "✕ 删除选中", self._remove_seller).pack(fill="x")
 
     def _build_right_panel(self, parent):
@@ -932,6 +1008,27 @@ class App(tk.Tk):
             save_settings(self.settings)
             self._refresh_seller_list()
             logging.info("已删除店铺：%s", s["id"])
+
+    def _batch_add_seller(self):
+        dlg = BatchAddSellersDialog(self)
+        self.wait_window(dlg)
+        if not dlg.result:
+            return
+        added, skipped = 0, 0
+        for item in dlg.result:
+            if any(s["id"] == item["id"] for s in self.settings["sellers"]):
+                skipped += 1
+            else:
+                self.settings["sellers"].append(item)
+                added += 1
+        if added:
+            save_settings(self.settings)
+            self._refresh_seller_list()
+            logging.info("批量添加：成功 %d 个，跳过重复 %d 个", added, skipped)
+        msg = f"成功添加 {added} 个店铺"
+        if skipped:
+            msg += f"，跳过重复 {skipped} 个"
+        messagebox.showinfo("添加完成", msg)
 
     # ── 上架时间选择 ──────────────────────────────────────────────────────────
 

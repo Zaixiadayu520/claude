@@ -61,12 +61,17 @@ def _build_session() -> requests.Session:
 def _is_bot_check(soup: BeautifulSoup) -> bool:
     """Return True if Amazon returned a CAPTCHA / robot-check page."""
     title = soup.find("title")
-    t = (title.get_text() if title else "").lower()
+    t = (title.get_text() if title else "").lower().strip()
     if "robot" in t or "captcha" in t or "validatecaptcha" in t:
         return True
     if soup.find("form", {"action": lambda a: a and "validateCaptcha" in a}):
         return True
-    if "api-services-support.amazon.com" in (soup.get_text()[:500]):
+    if "api-services-support.amazon.com" in (soup.get_text()[:800]):
+        return True
+    # "Amazon.com" title with no product or search content = bot wall
+    if t in ("amazon.com", "amazon") and not soup.select_one(
+            "#productTitle, #dp, #ppd, #title, "
+            "div[data-asin], .s-result-item"):
         return True
     return False
 
@@ -514,10 +519,20 @@ def batch_enrich_products(products: list[dict],
         return _tls.sess
 
     def _fetch_one(product: dict) -> None:
-        asin = product.get("asin", "")
+        asin       = product.get("asin", "")
+        seller_id  = product.get("seller_id", "")
         if not asin:
             return
-        soup = _get(_session(), _detail_url(asin))
+
+        sess = _session()
+        # Mimic arriving from the seller's storefront page
+        if seller_id:
+            sess.headers["Referer"] = (
+                f"https://www.{config.AMAZON_DOMAIN}/s"
+                f"?me={seller_id}&marketplaceID={config.MARKETPLACE_ID}"
+            )
+
+        soup = _get(sess, _detail_url(asin))
         if soup:
             date_str = _extract_date_first_available(soup)
             if date_str:
@@ -537,7 +552,8 @@ def batch_enrich_products(products: list[dict],
             if progress_cb:
                 progress_cb(n, total)
 
-        time.sleep(random.uniform(1.0, 2.0))
+        # Longer, more varied delay to reduce bot detection
+        time.sleep(random.uniform(2.5, 5.0))
 
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         futures = [pool.submit(_fetch_one, p) for p in needed]

@@ -26,7 +26,7 @@ LOG_DIR  = "logs"
 # Detail pages are no longer visited — only listing pages are fetched.
 # Concurrent pages: how many listing pages to fetch simultaneously.
 CONCURRENT_PAGES        = 4   # listing pages fetched in parallel
-CONCURRENT_DETAIL_PAGES = 2   # detail page workers (keep low to avoid blocks)
+CONCURRENT_DETAIL_PAGES = 1   # detail page workers — keep at 1 to avoid bot blocks
 MAX_PAGES_PER_SELLER    = 20  # safety cap; set 0 for unlimited
 REQUEST_TIMEOUT         = 25
 MAX_RETRIES             = 3
