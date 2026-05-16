@@ -808,10 +808,11 @@ class App(tk.Tk):
         _label(proxy_row, "代理设置：", size=9, fg=FG2, bg=BG2).pack(side="left")
         self.proxy_var = tk.StringVar(value=self.settings.get("proxy", ""))
         proxy_entry = _entry(proxy_row, self.proxy_var, font=("Consolas", 9))
-        proxy_entry.config(width=30)
-        proxy_entry.pack(side="left", ipady=3, padx=(0, 6))
-        _label(proxy_row, "例：http://127.0.0.1:7890", size=8, fg=FG2, bg=BG2).pack(side="left")
+        proxy_entry.config(width=28)
+        proxy_entry.pack(side="left", ipady=3, padx=(0, 4))
+        _label(proxy_row, "例：http://127.0.0.1:7897", size=8, fg=FG2, bg=BG2).pack(side="left")
         _btn(proxy_row, "保存", self._save_proxy, bg=BG3).pack(side="left", padx=(6, 0))
+        _btn(proxy_row, "测试连接", self._test_proxy, bg=BG3).pack(side="left", padx=(4, 0))
         self.proxy_status = _label(proxy_row, "", size=8, fg=GREEN, bg=BG2)
         self.proxy_status.pack(side="left", padx=(6, 0))
 
@@ -968,19 +969,79 @@ class App(tk.Tk):
         proxy = self.proxy_var.get().strip()
         self.settings["proxy"] = proxy
         save_settings(self.settings)
-        # Apply to amazon_scraper config immediately
         try:
             from amazon_scraper import config as _cfg
             _cfg.PROXY = proxy
         except Exception:
             pass
         if proxy:
-            self.proxy_status.config(text=f"已保存 ✓", fg=GREEN)
+            self.proxy_status.config(text="已保存 ✓", fg=GREEN)
             logging.info("代理已设置：%s", proxy)
         else:
             self.proxy_status.config(text="已清除", fg=FG2)
             logging.info("代理已清除")
         self.after(3000, lambda: self.proxy_status.config(text=""))
+
+    def _test_proxy(self):
+        proxy = self.proxy_var.get().strip()
+        self.proxy_status.config(text="测试中...", fg=YELLOW)
+        self.update_idletasks()
+
+        def _do_test():
+            import urllib.request
+            test_url = "https://www.amazon.com/robots.txt"
+            results = []
+
+            def _try(label, proxies):
+                try:
+                    import requests as _req
+                    r = _req.get(test_url, proxies=proxies,
+                                 timeout=10, allow_redirects=True)
+                    results.append((label, r.status_code, None))
+                except Exception as e:
+                    results.append((label, None, str(e)[:60]))
+
+            if proxy:
+                _try(f"HTTP代理({proxy})", {"http": proxy, "https": proxy})
+                # Also try socks5
+                socks_url = proxy.replace("http://", "socks5h://")
+                if socks_url != proxy:
+                    _try(f"SOCKS5({socks_url})", {"http": socks_url, "https": socks_url})
+            else:
+                _try("系统代理", None)
+
+            self.after(0, lambda: self._show_test_result(results))
+
+        threading.Thread(target=_do_test, daemon=True).start()
+
+    def _show_test_result(self, results):
+        success = [(l, c) for l, c, e in results if c and c < 400]
+        errors  = [(l, e) for l, c, e in results if e]
+
+        if success:
+            label, code = success[0]
+            self.proxy_status.config(text=f"连接成功 ✓ (HTTP {code})", fg=GREEN)
+            logging.info("代理测试成功：%s → HTTP %s", label, code)
+            # Auto-apply working proxy format
+            for l, c, e in results:
+                if c and c < 400 and "SOCKS5" in l:
+                    socks_url = self.proxy_var.get().strip().replace("http://", "socks5h://")
+                    self.proxy_var.set(socks_url)
+                    self.settings["proxy"] = socks_url
+                    save_settings(self.settings)
+                    logging.info("已自动切换为 SOCKS5 代理：%s", socks_url)
+                    break
+        else:
+            msgs = " | ".join(f"{l}: {e}" for l, e in errors[:2])
+            self.proxy_status.config(text="连接失败 ✗", fg=RED)
+            logging.error("代理测试失败：%s", msgs)
+            messagebox.showerror("连接测试失败",
+                f"无法通过代理连接 Amazon：\n\n{msgs}\n\n"
+                "请检查：\n"
+                "1. Clash/VPN 是否正在运行\n"
+                "2. 是否有可用节点\n"
+                "3. 端口号是否正确（Clash Verge 默认端口在设置→端口设置里查看）\n"
+                "4. 尝试将 http:// 改为 socks5h://")
 
     # ── 采集 ──────────────────────────────────────────────────────────────────
 
