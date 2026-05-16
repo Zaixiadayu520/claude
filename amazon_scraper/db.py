@@ -226,7 +226,7 @@ def get_stats() -> dict:
             "SELECT COUNT(DISTINCT seller_id) FROM products").fetchone()[0]
         last_row = con.execute(
             "SELECT MAX(scraped_date) FROM products").fetchone()[0]
-        last_run = last_row or "—"
+        last_run = last_row or "-"
     return {
         "total_products": total,
         "new_today":      new_today,

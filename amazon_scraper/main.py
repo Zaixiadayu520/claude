@@ -48,12 +48,12 @@ def run_once(seller_ids: list[str] | None = None,
     """
     Full scrape cycle.
 
-    listing_date_start/end → ISO date strings (YYYY-MM-DD).  Products whose
+    listing_date_start/end -> ISO date strings (YYYY-MM-DD).  Products whose
                              date_first_available falls in this range are
                              flagged as new.  Defaults to past 30 days.
-    fetch_dates=True       → visit each product's detail page to collect
+    fetch_dates=True       -> visit each product's detail page to collect
                              date_first_available and monthly_sales.
-    progress_cb            → optional callable(done, total) for GUI progress.
+    progress_cb            -> optional callable(done, total) for GUI progress.
     """
     logger = logging.getLogger(__name__)
 

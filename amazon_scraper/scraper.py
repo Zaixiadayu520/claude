@@ -55,9 +55,6 @@ def _build_session() -> requests.Session:
     s.cookies.set("sp-cdn",           "L5Z68:CN", domain=".amazon.com")
     if config.PROXY:
         s.proxies = {"http": config.PROXY, "https": config.PROXY}
-        s.trust_env = False   # use only our explicit proxy, ignore system proxy
-    else:
-        s.trust_env = True    # no explicit proxy → use system proxy (Clash, etc.)
     return s
 
 
@@ -99,7 +96,7 @@ _MONTH_MAP = {
 
 
 def _normalize_date(raw: str) -> str:
-    """Convert 'November 9, 2022' → '2022-11-09'. Returns raw if unparseable."""
+    """Convert 'November 9, 2022' -> '2022-11-09'. Returns raw if unparseable."""
     s = raw.strip()
     if not s:
         return ""
@@ -160,7 +157,7 @@ def _parse_monthly_sales_from_card(card: BeautifulSoup) -> str:
     )
     if m:
         raw = m.group(1).strip().rstrip("+")
-        # Normalise K/M suffixes → plain number with + suffix
+        # Normalise K/M suffixes -> plain number with + suffix
         raw_up = raw.upper().replace(",", "")
         if raw_up.endswith("K"):
             num = int(float(raw_up[:-1]) * 1000)
@@ -312,7 +309,7 @@ def scrape_seller(seller_id: str) -> list[dict]:
         return page1_products
 
     total = _total_pages(soup1, max_pages)
-    logger.info("并发采集第 2–%d 页（%d 个线程）", total, workers)
+    logger.info("并发采集第 2-%d 页（%d 个线程）", total, workers)
 
     all_products: list[dict] = list(page1_products)
     seen_asins: set[str] = {p["asin"] for p in page1_products}
@@ -348,7 +345,7 @@ def _extract_date_first_available(soup: BeautifulSoup) -> str:
         text = li.get_text(" ", strip=True)
         if keyword in text:
             # Remove the label, keep only the date part
-            date_part = re.sub(r".*Date First Available\s*[:‏]*\s*", "", text,
+            date_part = re.sub(r".*Date First Available\s*[:]*\s*", "", text,
                                flags=re.IGNORECASE).strip()
             if date_part:
                 return _normalize_date(date_part)
@@ -370,7 +367,7 @@ def _extract_date_first_available(soup: BeautifulSoup) -> str:
 
     # Pattern 4: plain text regex fallback
     m = re.search(
-        r"Date First Available\s*[:‏]*\s*([A-Za-z]+ \d{1,2},\s*\d{4})",
+        r"Date First Available\s*[:]*\s*([A-Za-z]+ \d{1,2},\s*\d{4})",
         soup.get_text(), re.IGNORECASE,
     )
     return _normalize_date(_clean(m.group(1))) if m else ""
@@ -463,8 +460,8 @@ def batch_enrich_products(products: list[dict],
             n = done_count[0]
             logger.info("  详情页 [%d/%d] ASIN:%s  上架:%s  月销:%s",
                         n, total, asin,
-                        product.get("date_first_available", "—"),
-                        product.get("monthly_sales", "—"))
+                        product.get("date_first_available", "-"),
+                        product.get("monthly_sales", "-"))
             if progress_cb:
                 progress_cb(n, total)
 
