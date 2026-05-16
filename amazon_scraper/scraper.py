@@ -497,6 +497,11 @@ def batch_enrich_products(products: list[dict],
                 sales = _extract_monthly_sales_detail(soup)
                 if sales:
                     product["monthly_sales"] = sales
+            # Extract brand from detail page if not found on listing page
+            if not product.get("brand"):
+                brand = _extract_brand_detail(soup)
+                if brand:
+                    product["brand"] = brand
 
         with _log_lock:
             done_count[0] += 1
