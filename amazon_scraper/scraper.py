@@ -115,38 +115,6 @@ def _normalize_date(raw: str) -> str:
     return s
 
 
-def _parse_detail_table(soup: BeautifulSoup) -> dict[str, str]:
-    """Extract all key-value pairs from product detail/tech-spec tables."""
-    details: dict[str, str] = {}
-
-    # Table-based detail sections
-    for row in soup.select(
-        "#productDetails_techSpec_section_1 tr, "
-        "#productDetails_detailBullets_sections1 tr, "
-        "#prodDetails tr"
-    ):
-        th = row.select_one("th")
-        td = row.select_one("td")
-        if th and td:
-            key = _clean(th.get_text(" ", strip=True))
-            val = _clean(td.get_text(" ", strip=True))
-            if key and val:
-                details[key] = val
-
-    # Bullet-list detail section
-    for item in soup.select("#detailBullets_feature_div li"):
-        text = _clean(item.get_text(" ", strip=True))
-        if not text or ":" not in text:
-            continue
-        key_raw, val_raw = text.split(":", 1)
-        key = _clean(key_raw.replace("‎", "").replace("‏", ""))
-        val = _clean(val_raw.replace("‎", "").replace("‏", ""))
-        if key and val:
-            details[key] = val
-
-    return details
-
-
 # ── Phase 1: listing page extraction ─────────────────────────────────────────
 
 def _storefront_url(seller_id: str, page: int = 1) -> str:
@@ -216,23 +184,14 @@ def _parse_cards(soup: BeautifulSoup, seller_id: str) -> list[dict]:
         title_tag = card.select_one("h2 span, h2 a span")
         title = _clean(title_tag.get_text()) if title_tag else ""
 
-        # Brand — try multiple selectors
+        # Brand
         brand = ""
-        # Try dedicated brand span
-        brand_tag = card.select_one("span.a-size-base-plus.a-color-base")
-        if not brand_tag:
-            brand_tag = card.select_one(".s-line-clamp-1 span, h2 ~ div span.a-size-base")
-        if brand_tag:
+        for brand_tag in card.select(".a-size-base.a-color-secondary"):
             raw = _clean(brand_tag.get_text())
-            if raw and not re.search(r"\$|bought|star|rating|\d+\s*%", raw, re.I) and len(raw) < 60:
-                brand = re.sub(r"(?i)^by\s+", "", raw).strip()
-        if not brand:
-            for brand_tag in card.select(".a-size-base.a-color-secondary"):
-                raw = _clean(brand_tag.get_text())
-                if raw and not re.search(r"\$|bought|star|rating|\d+\s*%", raw, re.I) and len(raw) < 60:
-                    brand = re.sub(r"(?i)^by\s+", "", raw).strip()
-                    if brand:
-                        break
+            if raw and not re.search(r"\$|bought|star|rating", raw, re.I):
+                brand = re.sub(r"^by\s+", "", raw, flags=re.IGNORECASE)
+                if brand:
+                    break
 
         # Price (USD forced via cookie + URL param)
         price, list_price = _parse_price(card)
@@ -381,39 +340,40 @@ def _detail_url(asin: str) -> str:
 
 
 def _extract_date_first_available(soup: BeautifulSoup) -> str:
-    """Extract and normalize 'Date First Available' from detail page."""
-    details = _parse_detail_table(soup)
-    for key in details:
-        if "date first available" in key.lower() or "上架时间" in key:
-            return _normalize_date(details[key])
+    """Try every known HTML pattern for 'Date First Available'."""
+    keyword = "Date First Available"
 
-    # Regex fallback on full page text
+    # Pattern 1: #detailBullets_feature_div  (most common)
+    for li in soup.select("#detailBullets_feature_div li"):
+        text = li.get_text(" ", strip=True)
+        if keyword in text:
+            # Remove the label, keep only the date part
+            date_part = re.sub(r".*Date First Available\s*[:‏]*\s*", "", text,
+                               flags=re.IGNORECASE).strip()
+            if date_part:
+                return _normalize_date(date_part)
+
+    # Pattern 2: product details table rows
+    for row in soup.select("tr"):
+        cells = row.select("td, th")
+        for i, cell in enumerate(cells):
+            if keyword in cell.get_text():
+                if i + 1 < len(cells):
+                    return _normalize_date(_clean(cells[i + 1].get_text()))
+
+    # Pattern 3: tech details table (some categories)
+    for row in soup.select(".a-keyvalue tr, .prodDetTable tr"):
+        label = row.select_one("th, td:first-child")
+        value = row.select_one("td:last-child")
+        if label and value and keyword in label.get_text():
+            return _normalize_date(_clean(value.get_text()))
+
+    # Pattern 4: plain text regex fallback
     m = re.search(
-        r"Date First Available\s*[:‎‏]*\s*([A-Za-z]+ \d{1,2},?\s*\d{4})",
-        soup.get_text(" "), re.IGNORECASE,
+        r"Date First Available\s*[:‏]*\s*([A-Za-z]+ \d{1,2},\s*\d{4})",
+        soup.get_text(), re.IGNORECASE,
     )
     return _normalize_date(_clean(m.group(1))) if m else ""
-
-
-def _extract_brand_detail(soup: BeautifulSoup) -> str:
-    """Extract brand from product detail page."""
-    # Primary: byline info (store/brand link)
-    for sel in ["#bylineInfo", "#brand", "a#bylineInfo_feature_div"]:
-        tag = soup.select_one(sel)
-        if tag:
-            txt = _clean(tag.get_text())
-            if txt:
-                txt = re.sub(r"(?i)^(brand|visit the|by)\s*[:\-]?\s*", "", txt).strip()
-                txt = re.sub(r"(?i)\s*(store|brand)$", "", txt).strip()
-                if txt:
-                    return txt[:80]
-
-    # Fallback: detail table "Brand" field
-    details = _parse_detail_table(soup)
-    for key in details:
-        if key.lower() in ("brand", "品牌"):
-            return details[key]
-    return ""
 
 
 def _extract_monthly_sales_detail(soup: BeautifulSoup) -> str:
@@ -497,11 +457,6 @@ def batch_enrich_products(products: list[dict],
                 sales = _extract_monthly_sales_detail(soup)
                 if sales:
                     product["monthly_sales"] = sales
-            # Extract brand from detail page if not found on listing page
-            if not product.get("brand"):
-                brand = _extract_brand_detail(soup)
-                if brand:
-                    product["brand"] = brand
 
         with _log_lock:
             done_count[0] += 1
