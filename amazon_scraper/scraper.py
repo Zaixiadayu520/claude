@@ -58,6 +58,19 @@ def _build_session() -> requests.Session:
     return s
 
 
+def _is_bot_check(soup: BeautifulSoup) -> bool:
+    """Return True if Amazon returned a CAPTCHA / robot-check page."""
+    title = soup.find("title")
+    t = (title.get_text() if title else "").lower()
+    if "robot" in t or "captcha" in t or "validatecaptcha" in t:
+        return True
+    if soup.find("form", {"action": lambda a: a and "validateCaptcha" in a}):
+        return True
+    if "api-services-support.amazon.com" in (soup.get_text()[:500]):
+        return True
+    return False
+
+
 def _get(session: requests.Session, url: str,
          extra_params: str = "") -> Optional[BeautifulSoup]:
     full_url = url + extra_params if extra_params else url
@@ -74,7 +87,17 @@ def _get(session: requests.Session, url: str,
             if resp.status_code != 200:
                 logger.warning("HTTP %s for %s", resp.status_code, full_url)
                 return None
-            return BeautifulSoup(resp.text, "lxml")
+            soup = BeautifulSoup(resp.text, "lxml")
+            if _is_bot_check(soup):
+                title = soup.find("title")
+                logger.warning(
+                    "⚠ Amazon 返回反爬验证页（attempt %d/%d）页面标题: %s  "
+                    "请检查：1.代理是否设置为全局模式  2.更换代理节点  3.稍后重试",
+                    attempt, config.MAX_RETRIES,
+                    title.get_text().strip() if title else "unknown")
+                time.sleep(15 * attempt)
+                continue
+            return soup
         except requests.RequestException as exc:
             logger.warning("Request error (attempt %d/%d): %s",
                            attempt, config.MAX_RETRIES, exc)
@@ -304,8 +327,22 @@ def scrape_seller(seller_id: str) -> list[dict]:
     page1_products = _parse_cards(soup1, seller_id)
     logger.info("  第1页：提取 %d 个产品", len(page1_products))
 
+    if len(page1_products) == 0:
+        # Check if the page has any search result containers at all
+        any_cards = soup1.select("div[data-asin]")
+        if not any_cards:
+            logger.warning(
+                "⚠ 第1页未找到任何商品卡片（data-asin 元素为0）。"
+                "可能原因：1.代理未开启全局模式  2.Amazon 反爬拦截  3.卖家ID有误。"
+                "页面标题: %s",
+                (soup1.find("title") or {}).get_text("").strip() if soup1.find("title") else "N/A"
+            )
+
     if not _has_next_page(soup1):
-        logger.info("单页店铺，采集完成。")
+        if len(page1_products) == 0:
+            logger.warning("单页且0产品，采集中止。")
+        else:
+            logger.info("单页店铺，采集完成。")
         return page1_products
 
     total = _total_pages(soup1, max_pages)
