@@ -804,7 +804,7 @@ class App(tk.Tk):
 
         # ── 代理设置 ──────────────────────────────────────────────────────────
         proxy_row = tk.Frame(ctrl_card, bg=BG2)
-        proxy_row.pack(fill="x", padx=14, pady=(0, 6))
+        proxy_row.pack(fill="x", padx=14, pady=(0, 2))
         _label(proxy_row, "代理设置：", size=9, fg=FG2, bg=BG2).pack(side="left")
         self.proxy_var = tk.StringVar(value=self.settings.get("proxy", ""))
         proxy_entry = _entry(proxy_row, self.proxy_var, font=("Consolas", 9))
@@ -815,6 +815,13 @@ class App(tk.Tk):
         _btn(proxy_row, "测试连接", self._test_proxy, bg=BG3).pack(side="left", padx=(4, 0))
         self.proxy_status = _label(proxy_row, "", size=8, fg=GREEN, bg=BG2)
         self.proxy_status.pack(side="left", padx=(6, 0))
+
+        proxy_hint = tk.Frame(ctrl_card, bg=BG2)
+        proxy_hint.pack(fill="x", padx=14, pady=(0, 6))
+        _label(proxy_hint,
+               "※ Clash已开启系统代理时：可将上方代理地址清空保存，程序自动走系统代理；"
+               "或在Clash切换为【全局模式】并选好节点后填入地址",
+               size=8, fg=FG2, bg=BG2).pack(side="left")
 
         # ── 行2：定时时间 + 操作按钮 ─────────────────────────────────────────
         row = tk.Frame(ctrl_card, bg=BG2)

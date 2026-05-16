@@ -55,6 +55,9 @@ def _build_session() -> requests.Session:
     s.cookies.set("sp-cdn",           "L5Z68:CN", domain=".amazon.com")
     if config.PROXY:
         s.proxies = {"http": config.PROXY, "https": config.PROXY}
+        s.trust_env = False   # use only our explicit proxy, ignore system proxy
+    else:
+        s.trust_env = True    # no explicit proxy → use system proxy (Clash, etc.)
     return s
 
 
