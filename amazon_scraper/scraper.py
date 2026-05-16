@@ -28,34 +28,63 @@ USER_AGENTS = [
     "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 "
     "(KHTML, like Gecko) Version/17.4 Safari/605.1.15",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0",
+]
+
+_ACCEPT_LANGS = [
+    "en-US,en;q=0.9",
+    "en-US,en;q=0.8",
+    "en-GB,en;q=0.9,en-US;q=0.8",
+    "en-US,en;q=0.9,es;q=0.7",
 ]
 
 
 def _build_session() -> requests.Session:
     s = requests.Session()
     s.headers.update({
-        "Accept-Language": "en-US,en;q=0.9",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept-Language": random.choice(_ACCEPT_LANGS),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,"
+                  "image/avif,image/webp,image/apng,*/*;q=0.8",
         "Accept-Encoding": "gzip, deflate, br",
         "Connection": "keep-alive",
-        "Cache-Control": "no-cache",
+        "Cache-Control": "max-age=0",
+        "Sec-Ch-Ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+        "Sec-Ch-Ua-Mobile": "?0",
+        "Sec-Ch-Ua-Platform": '"Windows"',
         "Sec-Fetch-Dest": "document",
         "Sec-Fetch-Mode": "navigate",
         "Sec-Fetch-Site": "none",
         "Sec-Fetch-User": "?1",
         "Upgrade-Insecure-Requests": "1",
-        "DNT": "1",
     })
-    # Force USD pricing regardless of geo-IP location
-    s.cookies.set("i18n-prefs",       "USD",  domain=".amazon.com")
-    s.cookies.set("lc-main",          "en_US", domain=".amazon.com")
-    s.cookies.set("sp-cdn",           "L5Z68:CN", domain=".amazon.com")
+    # Force USD — do NOT set sp-cdn (reveals geo location, triggers extra checks)
+    s.cookies.set("i18n-prefs", "USD",   domain=".amazon.com")
+    s.cookies.set("lc-main",    "en_US", domain=".amazon.com")
     if config.PROXY:
         s.proxies = {"http": config.PROXY, "https": config.PROXY}
     return s
+
+
+def _warmup_session(session: requests.Session) -> None:
+    """Visit amazon.com homepage to get real session cookies before scraping."""
+    try:
+        session.headers["User-Agent"] = random.choice(USER_AGENTS)
+        resp = session.get(
+            f"https://www.{config.AMAZON_DOMAIN}/",
+            timeout=config.REQUEST_TIMEOUT,
+        )
+        if resp.status_code == 200:
+            logger.debug("Session warmed up (got %d cookies)", len(session.cookies))
+        time.sleep(random.uniform(1.5, 3.0))
+    except Exception as exc:
+        logger.debug("Warm-up skipped: %s", exc)
 
 
 def _is_bot_check(soup: BeautifulSoup) -> bool:
@@ -365,6 +394,7 @@ def scrape_seller(seller_id: str) -> list[dict]:
     workers   = min(config.CONCURRENT_PAGES, max_pages)
 
     session_p1 = _build_session()
+    _warmup_session(session_p1)
     soup1 = _get(session_p1, _storefront_url(seller_id, 1))
     if soup1 is None:
         logger.error("无法访问店铺 %s 的页面", seller_id)
