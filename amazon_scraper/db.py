@@ -139,7 +139,9 @@ def upsert_products(products: list[dict],
             review_count         = excluded.review_count,
             prime                = excluded.prime,
             sponsored            = excluded.sponsored,
-            monthly_sales        = excluded.monthly_sales,
+            monthly_sales        = CASE WHEN excluded.monthly_sales != ''
+                                        THEN excluded.monthly_sales
+                                        ELSE monthly_sales END,
             date_first_available = CASE WHEN excluded.date_first_available != ''
                                         THEN excluded.date_first_available
                                         ELSE date_first_available END,
@@ -202,7 +204,6 @@ def get_existing_product_data(asins: list[str]) -> dict[str, dict]:
         rows = con.execute(
             f"SELECT asin, date_first_available, monthly_sales "
             f"FROM products WHERE asin IN ({placeholders}) "
-            f"AND date_first_available != '' "
             f"ORDER BY scraped_date DESC",
             asins,
         ).fetchall()

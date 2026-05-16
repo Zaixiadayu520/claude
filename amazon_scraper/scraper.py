@@ -218,18 +218,25 @@ def _normalise_sales_num(raw: str) -> str:
 
 def _parse_monthly_sales_from_card(card: BeautifulSoup) -> str:
     """Extract 'X+ bought in past month' badge from a listing card."""
-    # First try specific badge elements Amazon uses
+    _re = re.compile(
+        r"([\d,]+(?:\.\d+)?[KkMm]?\+?)\s+"
+        r"(?:bought|purchased|sold)\s+in\s+(?:the\s+)?past\s+month",
+        re.IGNORECASE)
+    _over_re = re.compile(
+        r"over\s+([\d,]+(?:\.\d+)?[KkMm]?)\s+(?:bought|purchased)"
+        r"\s+in\s+(?:the\s+)?past\s+month", re.IGNORECASE)
+
     for tag in card.select(
         "span.a-color-secondary, "
         "span[class*='social-proof'], "
+        "span[class*='socialProof'], "
         "span[data-component-type='s-status-badge-component'] span, "
+        "[id*='bought-in-past-month'] span, "
+        "[id*='boughtInPastMonth'] span, "
         ".a-row span"
     ):
         t = tag.get_text(" ", strip=True)
-        m = re.search(
-            r"([\d,]+(?:\.\d+)?[KkMm]?\+?)\s+"
-            r"(?:bought|purchased|sold)\s+in\s+(?:the\s+)?past\s+month",
-            t, re.IGNORECASE)
+        m = _re.search(t) or _over_re.search(t)
         if m:
             return _normalise_sales_num(m.group(1))
 
@@ -488,19 +495,28 @@ def _extract_date_first_available(soup: BeautifulSoup) -> str:
 
 def _extract_monthly_sales_detail(soup: BeautifulSoup) -> str:
     """Extract monthly sales from a product detail page."""
-    # 1. Specific badge elements (most reliable)
+    _sales_re = re.compile(
+        r"([\d,]+(?:\.\d+)?[KkMm]?\+?)\s+(?:bought|purchased|sold)"
+        r"\s+in\s+(?:the\s+)?past\s+month", re.IGNORECASE)
+    _over_re  = re.compile(
+        r"over\s+([\d,]+(?:\.\d+)?[KkMm]?)\s+(?:bought|purchased)"
+        r"\s+in\s+(?:the\s+)?past\s+month", re.IGNORECASE)
+
+    # 1. Known badge/social-proof element IDs and classes (most reliable)
     for tag in soup.select(
+        "#social-proofing-faceout-title-id-announce, "
         "span.social-proofing-faceout-title-text, "
         "#socialProofingAsinFaceout_feature_div span, "
         "span[id*='social-proof'], "
+        "span[id*='social_proof'], "
         "span[data-csa-c-content-id*='social'], "
         ".social-proofing-faceout span, "
-        "#social-proofing-faceout-title-id-announce"
+        "[id*='bought-in-past-month'], "
+        "[id*='boughtInPastMonth'], "
+        "span.a-color-secondary"
     ):
         t = tag.get_text(" ", strip=True)
-        m = re.search(
-            r"([\d,]+(?:\.\d+)?[KkMm]?\+?)\s+(?:bought|purchased|sold)"
-            r"\s+in\s+(?:the\s+)?past\s+month", t, re.IGNORECASE)
+        m = _sales_re.search(t) or _over_re.search(t)
         if m:
             return _normalise_sales_num(m.group(1))
 
@@ -531,10 +547,11 @@ def batch_enrich_products(products: list[dict],
     Modifies list in-place.
     Each worker reuses a persistent session to reduce connection overhead.
     """
-    needed = [p for p in products if not p.get("date_first_available")]
+    needed = [p for p in products
+              if not p.get("date_first_available") or not p.get("monthly_sales")]
     total  = len(needed)
     if not total:
-        logger.info("所有产品已有上架日期，跳过详情页采集。")
+        logger.info("所有产品已有上架日期和月销量，跳过详情页采集。")
         return
 
     logger.info("开始采集详情页：%d 个产品（%d 个并发线程）...", total, max_workers)
