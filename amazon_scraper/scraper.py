@@ -169,26 +169,46 @@ def _parse_price(card: BeautifulSoup) -> tuple[str, str]:
     return price, list_price
 
 
+def _normalise_sales_num(raw: str) -> str:
+    """Convert '1K', '1.5M', '2,000' etc. → formatted string like '1,000+'."""
+    s = raw.strip().rstrip("+").replace(",", "").upper()
+    try:
+        if s.endswith("K"):
+            return f"{int(float(s[:-1]) * 1_000):,}+"
+        if s.endswith("M"):
+            return f"{int(float(s[:-1]) * 1_000_000):,}+"
+        return f"{int(s):,}+"
+    except ValueError:
+        return raw.strip() + "+"
+
+
 def _parse_monthly_sales_from_card(card: BeautifulSoup) -> str:
     """Extract 'X+ bought in past month' badge from a listing card."""
-    # Walk every text node in the card
+    # First try specific badge elements Amazon uses
+    for tag in card.select(
+        "span.a-color-secondary, "
+        "span[class*='social-proof'], "
+        "span[data-component-type='s-status-badge-component'] span, "
+        ".a-row span"
+    ):
+        t = tag.get_text(" ", strip=True)
+        m = re.search(
+            r"([\d,]+(?:\.\d+)?[KkMm]?\+?)\s+"
+            r"(?:bought|purchased|sold)\s+in\s+(?:the\s+)?past\s+month",
+            t, re.IGNORECASE)
+        if m:
+            return _normalise_sales_num(m.group(1))
+
+    # Fallback: full card text
     full_text = card.get_text(" ", strip=True)
-    # Patterns: "1K+ bought in past month", "500+ bought in past month", "1,000+ bought in past month"
-    m = re.search(
-        r"([\d,]+(?:\.\d+)?[KkMm]?\+?)\s+bought in past month",
-        full_text, re.IGNORECASE,
-    )
-    if m:
-        raw = m.group(1).strip().rstrip("+")
-        # Normalise K/M suffixes -> plain number with + suffix
-        raw_up = raw.upper().replace(",", "")
-        if raw_up.endswith("K"):
-            num = int(float(raw_up[:-1]) * 1000)
-            return f"{num:,}+"
-        if raw_up.endswith("M"):
-            num = int(float(raw_up[:-1]) * 1_000_000)
-            return f"{num:,}+"
-        return raw + "+"
+    for pat in [
+        r"([\d,]+(?:\.\d+)?[KkMm]?\+?)\s+(?:bought|purchased|sold)\s+in\s+(?:the\s+)?past\s+month",
+        r"over\s+([\d,]+(?:\.\d+)?[KkMm]?)\s+(?:bought|purchased)\s+in\s+(?:the\s+)?past\s+month",
+        r"([\d,]+[KkMm]?)\+?\s+(?:people\s+)?(?:bought|purchased)\s+(?:this\s+)?(?:in\s+)?(?:the\s+)?past\s+month",
+    ]:
+        m = re.search(pat, full_text, re.IGNORECASE)
+        if m:
+            return _normalise_sales_num(m.group(1))
     return ""
 
 
@@ -204,13 +224,34 @@ def _parse_cards(soup: BeautifulSoup, seller_id: str) -> list[dict]:
         title_tag = card.select_one("h2 span, h2 a span")
         title = _clean(title_tag.get_text()) if title_tag else ""
 
-        # Brand
+        # Brand — try multiple patterns
         brand = ""
-        for brand_tag in card.select(".a-size-base.a-color-secondary"):
+        # Pattern 1: "by BrandName" in secondary-color spans
+        for brand_tag in card.select(".a-size-base.a-color-secondary, .a-color-secondary.a-text-normal"):
             raw = _clean(brand_tag.get_text())
-            if raw and not re.search(r"\$|bought|star|rating", raw, re.I):
-                brand = re.sub(r"^by\s+", "", raw, flags=re.IGNORECASE)
-                if brand:
+            if raw and len(raw) < 80 and not re.search(
+                    r"\$|bought|star|rating|\d+%|review|eligible", raw, re.I):
+                candidate = re.sub(r"^(?:by|brand[:\s]+|visit\s+the\s+)", "",
+                                   raw, flags=re.IGNORECASE).strip()
+                candidate = re.sub(r"\s+(?:store|brand\s+store)$", "",
+                                   candidate, flags=re.IGNORECASE).strip()
+                if candidate:
+                    brand = candidate
+                    break
+        # Pattern 2: explicit "Brand: X" label
+        if not brand:
+            for row in card.select(".a-row"):
+                txt = _clean(row.get_text())
+                m = re.match(r"^(?:Brand|品牌)\s*[:\s]\s*(.+)$", txt, re.IGNORECASE)
+                if m and len(m.group(1)) < 80:
+                    brand = m.group(1).strip()
+                    break
+        # Pattern 3: span inside h5/h4 brand headers
+        if not brand:
+            for tag in card.select("h5 span, h4 span, .s-brand-name span"):
+                raw = _clean(tag.get_text())
+                if raw and len(raw) < 80:
+                    brand = raw
                     break
 
         # Price (USD forced via cookie + URL param)
@@ -411,42 +452,36 @@ def _extract_date_first_available(soup: BeautifulSoup) -> str:
 
 
 def _extract_monthly_sales_detail(soup: BeautifulSoup) -> str:
-    """Extract monthly sales from a product detail page (more reliable than listing page)."""
-    full_text = soup.get_text(" ", strip=True)
-    m = re.search(
-        r"([\d,]+(?:\.\d+)?[KkMm]?\+?)\s+(?:purchased|bought)\s+(?:in\s+)?(?:the\s+)?past\s+month",
-        full_text, re.IGNORECASE,
-    )
-    if not m:
+    """Extract monthly sales from a product detail page."""
+    # 1. Specific badge elements (most reliable)
+    for tag in soup.select(
+        "span.social-proofing-faceout-title-text, "
+        "#socialProofingAsinFaceout_feature_div span, "
+        "span[id*='social-proof'], "
+        "span[data-csa-c-content-id*='social'], "
+        ".social-proofing-faceout span, "
+        "#social-proofing-faceout-title-id-announce"
+    ):
+        t = tag.get_text(" ", strip=True)
         m = re.search(
-            r"([\d,]+[KkMm]?)\+?\s+people\s+(?:purchased|bought)",
-            full_text, re.IGNORECASE,
-        )
-    if not m:
-        # Amazon sometimes shows it as a badge in a specific element
-        for tag in soup.select(
-            "span.social-proofing-faceout-title-text, "
-            "span[id*='social-proof'], "
-            "span[data-csa-c-content-id*='social'], "
-            ".social-proofing-faceout span, "
-            "#socialProofingAsinFaceout_feature_div span"
-        ):
-            badge_m = re.search(
-                r"([\d,KkMm]+\+?)\s+(?:purchased|bought)", tag.get_text(), re.I)
-            if badge_m:
-                m = badge_m
-                break
-    if not m:
-        return ""
-    raw = m.group(1).strip().rstrip("+").replace(",", "").upper()
-    if raw.endswith("K"):
-        return f"{int(float(raw[:-1]) * 1000):,}+"
-    if raw.endswith("M"):
-        return f"{int(float(raw[:-1]) * 1_000_000):,}+"
-    try:
-        return f"{int(raw):,}+"
-    except ValueError:
-        return raw + "+"
+            r"([\d,]+(?:\.\d+)?[KkMm]?\+?)\s+(?:bought|purchased|sold)"
+            r"\s+in\s+(?:the\s+)?past\s+month", t, re.IGNORECASE)
+        if m:
+            return _normalise_sales_num(m.group(1))
+
+    # 2. Full page text fallback
+    full_text = soup.get_text(" ", strip=True)
+    for pat in [
+        r"([\d,]+(?:\.\d+)?[KkMm]?\+?)\s+(?:bought|purchased|sold)"
+        r"\s+in\s+(?:the\s+)?past\s+month",
+        r"over\s+([\d,]+(?:\.\d+)?[KkMm]?)\s+(?:bought|purchased)"
+        r"\s+in\s+(?:the\s+)?past\s+month",
+        r"([\d,]+[KkMm]?)\+?\s+people\s+(?:purchased|bought)",
+    ]:
+        m = re.search(pat, full_text, re.IGNORECASE)
+        if m:
+            return _normalise_sales_num(m.group(1))
+    return ""
 
 
 def batch_enrich_products(products: list[dict],

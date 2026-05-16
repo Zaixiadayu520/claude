@@ -154,34 +154,16 @@ class AddSellerDialog(tk.Toplevel):
         self.destroy()
 
 
-# ── 翻译工具 ─────────────────────────────────────────────────────────────────
-
-def _translate_to_zh(text: str) -> str:
-    """Translate English text to Chinese via Google Translate (no API key needed)."""
-    if not text:
-        return ""
-    try:
-        import urllib.parse, urllib.request, json
-        q   = urllib.parse.quote(text[:500])
-        url = (f"https://translate.googleapis.com/translate_a/single"
-               f"?client=gtx&sl=en&tl=zh-CN&dt=t&q={q}")
-        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=6) as resp:
-            data = json.loads(resp.read().decode())
-        return "".join(seg[0] for seg in data[0] if seg[0])
-    except Exception:
-        return ""
-
 
 # ── 数据库查看弹窗 ────────────────────────────────────────────────────────────
 
 class DBViewerDialog(tk.Toplevel):
     # Table columns: (db_field, header_label, width)
     COLS = [
+        ("chk",                  "选",          30),
         ("asin",                 "ASIN",       100),
         ("url",                  "商品链接",    80),
-        ("title",                "标题",        220),
-        ("title_zh",             "中文标题",    200),
+        ("title",                "标题",        240),
         ("brand",                "品牌",        90),
         ("price",                "价格(USD)",   80),
         ("monthly_sales",        "月销量",      75),
@@ -194,16 +176,33 @@ class DBViewerDialog(tk.Toplevel):
         ("is_new",               "新品",        45),
     ]
 
+    # Export columns: (db_field, header_label) — uses real data from _rows_cache
+    _EXPORT_COLS = [
+        ("asin",                 "ASIN"),
+        ("url",                  "商品链接"),
+        ("main_image_url",       "主图URL"),
+        ("title",                "标题"),
+        ("brand",                "品牌"),
+        ("price",                "价格(USD)"),
+        ("monthly_sales",        "月销量"),
+        ("rating",               "评分"),
+        ("review_count",         "评论数"),
+        ("prime",                "Prime"),
+        ("date_first_available", "上架日期"),
+        ("seller_id",            "店铺ID"),
+        ("scraped_date",         "采集日期"),
+        ("is_new",               "新品"),
+    ]
+
     def __init__(self, parent):
         super().__init__(parent)
         self.title("数据库数据查看")
-        self.geometry("1200x660")
+        self.geometry("1280x680")
         self.minsize(1000, 520)
         self.configure(bg=BG)
         self.grab_set()
-        self._zh_cache: dict[str, str] = {}
         self._img_cache: dict[str, object] = {}   # asin -> ImageTk.PhotoImage
-        self._placeholder_img = None
+        self._checked: set[str] = set()           # iids of checked rows
         self._date_mode = tk.StringVar(value="scraped")   # "scraped" or "listed"
         self._build()
         self._apply_quick("最近30天")
@@ -270,10 +269,11 @@ class DBViewerDialog(tk.Toplevel):
                        activebackground=BG, font=("微软雅黑", 9),
                        command=self._load).pack(side="left", padx=(10, 4))
 
-        _btn(row2, "🔍 查询",    self._load,          bg=ACCENT).pack(side="left", padx=3)
-        _btn(row2, "🌐 翻译选中", self._translate_selected, bg=BG3).pack(side="left", padx=3)
-        _btn(row2, "🌐 翻译全部", self._translate_all,  bg=BG3).pack(side="left", padx=3)
-        _btn(row2, "📤 导出CSV",  self._export_csv,     bg=BG3).pack(side="left", padx=3)
+        _btn(row2, "🔍 查询",    self._load,           bg=ACCENT).pack(side="left", padx=3)
+        _btn(row2, "☑ 全选",    self._select_all,     bg=BG3).pack(side="left", padx=3)
+        _btn(row2, "☐ 取消全选", self._deselect_all,   bg=BG3).pack(side="left", padx=3)
+        _btn(row2, "📤 导出选中", self._export_checked, bg=ACCENT2).pack(side="left", padx=3)
+        _btn(row2, "📤 导出全部", self._export_csv,     bg=BG3).pack(side="left", padx=3)
 
         self.count_label = tk.Label(row2, text="", font=("微软雅黑", 9),
                                     bg=BG, fg=FG2)
@@ -301,10 +301,14 @@ class DBViewerDialog(tk.Toplevel):
         self.tree.column("#0", width=60, minwidth=60, anchor="center", stretch=False)
         self.tree.heading("#0", text="主图")
         for cid, lbl, w in self.COLS:
-            self.tree.heading(cid, text=lbl,
-                              command=lambda c=cid: self._sort_by(c))
-            anchor = "center" if cid in ("is_new", "prime", "url") else "w"
-            self.tree.column(cid, width=w, anchor=anchor, minwidth=40)
+            if cid == "chk":
+                self.tree.heading(cid, text=lbl)   # no sort on checkbox col
+                self.tree.column(cid, width=w, minwidth=w, anchor="center", stretch=False)
+            else:
+                self.tree.heading(cid, text=lbl,
+                                  command=lambda c=cid: self._sort_by(c))
+                anchor = "center" if cid in ("is_new", "prime", "url") else "w"
+                self.tree.column(cid, width=w, anchor=anchor, minwidth=40)
 
         vsb = ttk.Scrollbar(frame, orient="vertical",   command=self.tree.yview)
         hsb = ttk.Scrollbar(frame, orient="horizontal", command=self.tree.xview)
@@ -315,12 +319,12 @@ class DBViewerDialog(tk.Toplevel):
         frame.rowconfigure(0, weight=1)
         frame.columnconfigure(0, weight=1)
 
-        # 双击打开商品链接
-        self.tree.bind("<Double-1>", self._on_double_click)
+        # 单击"选"列勾选，双击"商品链接"列打开链接
+        self.tree.bind("<ButtonRelease-1>", self._on_tree_click)
 
         self._sort_col = ""
         self._sort_asc = True
-        self._rows_cache: list[dict] = []   # raw dicts for translation
+        self._rows_cache: list[dict] = []
 
     # ── 快捷日期 ──────────────────────────────────────────────────────────────
 
@@ -398,12 +402,13 @@ class DBViewerDialog(tk.Toplevel):
             con.close()
 
             self._rows_cache = [dict(zip(db_cols, r)) for r in rows]
+            self._checked.clear()
             self.tree.delete(*self.tree.get_children())
             thumb_jobs: list[tuple[str, str, str]] = []   # (iid, url, asin)
             for rd in self._rows_cache:
-                zh = self._zh_cache.get(rd["asin"], "")
                 vals = (
-                    rd["asin"], "🔗 打开", rd["title"], zh,
+                    "☐",
+                    rd["asin"], "🔗 打开", rd["title"],
                     rd["brand"], rd["price"],
                     rd["monthly_sales"], rd["rating"], rd["review_count"],
                     rd["prime"], rd["date_first_available"],
@@ -411,7 +416,6 @@ class DBViewerDialog(tk.Toplevel):
                     "✓" if str(rd["is_new"]) == "1" else "",
                 )
                 tag = "new" if str(rd["is_new"]) == "1" else ""
-                # Use cached image if available
                 cached_img = self._img_cache.get(rd["asin"])
                 iid = self.tree.insert("", "end",
                                        image=cached_img or "",
@@ -428,88 +432,62 @@ class DBViewerDialog(tk.Toplevel):
         except Exception as exc:
             messagebox.showerror("查询失败", str(exc))
 
-    # ── 双击打开链接 ──────────────────────────────────────────────────────────
+    # ── 单击事件：勾选 or 打开链接 ────────────────────────────────────────────
 
-    def _on_double_click(self, event):
-        item = self.tree.focus()
+    def _on_tree_click(self, event):
+        item = self.tree.identify_row(event.y)
+        col  = self.tree.identify_column(event.x)
         if not item:
             return
-        col = self.tree.identify_column(event.x)
-        col_idx = int(col.replace("#", "")) - 1
-        col_id = [c[0] for c in self.COLS][col_idx] if col_idx < len(self.COLS) else ""
-        row_vals = self.tree.item(item)["values"]
-        # Find URL from cache
+        # #1 = "选" column → toggle checkbox
+        if col == "#1":
+            self._toggle_check(item)
+        # #3 = "商品链接" column → open URL
+        elif col == "#3":
+            self._open_item_url(item)
+
+    def _toggle_check(self, iid: str):
+        vals = list(self.tree.item(iid)["values"])
+        if iid in self._checked:
+            self._checked.discard(iid)
+            vals[0] = "☐"
+        else:
+            self._checked.add(iid)
+            vals[0] = "☑"
+        self.tree.item(iid, values=vals)
+        n = len(self._checked)
+        self.count_label.config(
+            text=self.count_label.cget("text").split("  |")[0]
+                 + f"  |  已选 {n} 行")
+
+    def _select_all(self):
+        for iid in self.tree.get_children():
+            if iid not in self._checked:
+                self._checked.add(iid)
+                vals = list(self.tree.item(iid)["values"])
+                vals[0] = "☑"
+                self.tree.item(iid, values=vals)
+        self.count_label.config(
+            text=self.count_label.cget("text").split("  |")[0]
+                 + f"  |  已选 {len(self._checked)} 行")
+
+    def _deselect_all(self):
+        self._checked.clear()
+        for iid in self.tree.get_children():
+            vals = list(self.tree.item(iid)["values"])
+            vals[0] = "☐"
+            self.tree.item(iid, values=vals)
+        self.count_label.config(
+            text=self.count_label.cget("text").split("  |")[0])
+
+    def _open_item_url(self, iid: str):
         iid_list = list(self.tree.get_children())
-        row_idx  = iid_list.index(item) if item in iid_list else -1
-        if row_idx >= 0 and row_idx < len(self._rows_cache):
-            url = self._rows_cache[row_idx].get("url", "")
+        idx = iid_list.index(iid) if iid in iid_list else -1
+        if 0 <= idx < len(self._rows_cache):
+            url = self._rows_cache[idx].get("url", "")
             if url:
                 import webbrowser
                 webbrowser.open(url)
-
-    # ── 翻译 ──────────────────────────────────────────────────────────────────
-
-    def _translate_selected(self):
-        sel = self.tree.selection()
-        if not sel:
-            messagebox.showinfo("提示", "请先选中一行。")
-            return
-        self._do_translate(sel)
-
-    def _translate_all(self):
-        self._do_translate(self.tree.get_children())
-
-    def _do_translate(self, item_ids):
-        iid_list = list(self.tree.get_children())
-        to_fetch: list[tuple[str, str, int]] = []  # (iid, title, row_idx)
-        for iid in item_ids:
-            idx = iid_list.index(iid) if iid in iid_list else -1
-            if idx < 0 or idx >= len(self._rows_cache):
-                continue
-            rd = self._rows_cache[idx]
-            asin  = rd["asin"]
-            title = rd["title"]
-            if title and asin not in self._zh_cache:
-                to_fetch.append((iid, title, asin))
-
-        if not to_fetch:
-            # Already translated — just refresh display
-            self._refresh_zh_column()
-            return
-
-        self.count_label.config(text=f"翻译中… 0/{len(to_fetch)}")
-        self.update_idletasks()
-
-        def worker():
-            for i, (iid, title, asin) in enumerate(to_fetch, 1):
-                zh = _translate_to_zh(title)
-                self._zh_cache[asin] = zh
-                self.after(0, lambda iid=iid, zh=zh:
-                           self._update_zh_cell(iid, zh))
-                self.after(0, lambda i=i:
-                           self.count_label.config(
-                               text=f"翻译中… {i}/{len(to_fetch)}"))
-            self.after(0, lambda: self.count_label.config(
-                text=f"翻译完成，共 {len(self._rows_cache)} 条"))
-
-        threading.Thread(target=worker, daemon=True).start()
-
-    def _update_zh_cell(self, iid: str, zh: str):
-        vals = list(self.tree.item(iid)["values"])
-        # title_zh is column index 3
-        if len(vals) > 3:
-            vals[3] = zh
-            self.tree.item(iid, values=vals)
-
-    def _refresh_zh_column(self):
-        iid_list = list(self.tree.get_children())
-        for idx, iid in enumerate(iid_list):
-            if idx >= len(self._rows_cache):
-                break
-            asin = self._rows_cache[idx]["asin"]
-            zh   = self._zh_cache.get(asin, "")
-            if zh:
-                self._update_zh_cell(iid, zh)
 
     # ── 列排序 ────────────────────────────────────────────────────────────────
 
@@ -558,29 +536,71 @@ class DBViewerDialog(tk.Toplevel):
         except Exception:
             pass
 
-    # ── 导出 CSV ──────────────────────────────────────────────────────────────
+    # ── 导出 ──────────────────────────────────────────────────────────────────
 
-    def _export_csv(self):
+    def _rows_to_export(self, iids):
+        """Return list-of-lists ready for CSV from _rows_cache for given iids."""
+        iid_list = list(self.tree.get_children())
+        out = []
+        for iid in iids:
+            idx = iid_list.index(iid) if iid in iid_list else -1
+            if 0 <= idx < len(self._rows_cache):
+                rd = self._rows_cache[idx]
+                out.append([
+                    rd.get("asin", ""),
+                    rd.get("url", ""),
+                    rd.get("main_image_url", ""),
+                    rd.get("title", ""),
+                    rd.get("brand", ""),
+                    rd.get("price", ""),
+                    rd.get("monthly_sales", ""),
+                    rd.get("rating", ""),
+                    rd.get("review_count", ""),
+                    rd.get("prime", ""),
+                    rd.get("date_first_available", ""),
+                    rd.get("seller_id", ""),
+                    rd.get("scraped_date", ""),
+                    "是" if str(rd.get("is_new", "")) == "1" else "否",
+                ])
+        return out
+
+    def _save_csv(self, rows, filename_hint: str):
         from tkinter import filedialog
         import csv
         from datetime import date
         path = filedialog.asksaveasfilename(
             defaultextension=".csv",
             filetypes=[("CSV 文件", "*.csv")],
-            initialfile=f"export_{date.today().isoformat()}.csv",
+            initialfile=f"{filename_hint}_{date.today().isoformat()}.csv",
         )
         if not path:
             return
-        headers = [c[1] for c in self.COLS]
+        headers = [c[1] for c in self._EXPORT_COLS]
         try:
             with open(path, "w", newline="", encoding="utf-8-sig") as f:
                 w = csv.writer(f)
                 w.writerow(headers)
-                for iid in self.tree.get_children():
-                    w.writerow(self.tree.item(iid)["values"])
-            messagebox.showinfo("导出成功", f"已保存至：\n{path}")
+                w.writerows(rows)
+            messagebox.showinfo("导出成功", f"已保存 {len(rows)} 行至：\n{path}")
         except Exception as exc:
             messagebox.showerror("导出失败", str(exc))
+
+    def _export_checked(self):
+        checked = [iid for iid in self.tree.get_children()
+                   if iid in self._checked]
+        if not checked:
+            messagebox.showinfo("提示", "请先勾选要导出的行（点击'选'列打勾）。")
+            return
+        rows = self._rows_to_export(checked)
+        self._save_csv(rows, "export_selected")
+
+    def _export_csv(self):
+        all_iids = list(self.tree.get_children())
+        if not all_iids:
+            messagebox.showinfo("提示", "当前无数据，请先查询。")
+            return
+        rows = self._rows_to_export(all_iids)
+        self._save_csv(rows, "export_all")
 
 
 # ── 通用小控件 ────────────────────────────────────────────────────────────────
